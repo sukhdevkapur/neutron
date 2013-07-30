@@ -25,3 +25,7 @@ stevedore>=0.9
 # Cisco plugin dependencies
 python-novaclient
 # End Cisco dependencies
+
+# Arista mechanism driver dependencies
+jsonrpclib
+# end Arista mechanism driver dependencies

@@ -34,28 +34,24 @@ LOG = logging.getLogger(__name__)
 
 
 ARISTA_DRIVER_OPTS = [
-    cfg.StrOpt('arista_eapi_user',
+    cfg.StrOpt('eapi_user',
                default=None,
-               help=_('Username for Arista vEOS')),
-    cfg.StrOpt('arista_eapi_pass',
+               help=_('Username for Arista EOS')),
+    cfg.StrOpt('eapi_pass',
                default=None,
                secret=True,  # do not expose value in the logs
-               help=_('Password for Arista vEOS')),
-    cfg.StrOpt('arista_eapi_host',
+               help=_('Password for Arista EOS')),
+    cfg.StrOpt('eapi_host',
                default=None,
-               help=_('Arista vEOS host IP')),
-    cfg.StrOpt('arista_segmentation_type',
-               default=VLAN_SEGMENTATION,
-               help=_('L2 segmentation type to be used on hardware routers. '
-                      'One of vlan or tunnel is supported.')),
-    cfg.BoolOpt('arista_use_fqdn',
+               help=_('Arista EOS host IP')),
+    cfg.BoolOpt('use_fqdn',
                 default=False,
-                help=_('Defines if hostnames are sent to Arista vEOS as FQDNs '
+                help=_('Defines if hostnames are sent to Arista EOS as FQDNs '
                        '("node1.domain.com") or as short names ("node1")')),
-    cfg.IntOpt('arista_sync_interval',
+    cfg.IntOpt('sync_interval',
                default=10,
                help=_('Sync interval in seconds between Neutron plugin and '
-                      'vEOS'))
+                      'EOS'))
 ]
 
 cfg.CONF.register_opts(ARISTA_DRIVER_OPTS, "ARISTA_DRIVER")
@@ -71,8 +67,8 @@ class AristaConfigError(exceptions.NeutronException):
 class ProvisionedNetsStorage(object):
     class AristaProvisionedNets(model_base.BASEV2):
         """
-        Stores VLANs provisioned on Arista vEOS. Allows to limit nubmer of RPC
-        calls to the vEOS command API in case VLAN was provisioned before.
+        Stores networks provisioned on Arista EOS. Limits the nubmer of RPC
+        calls to the EOS command API in case network was provisioned before.
         """
         __tablename__ = 'arista_provisioned_nets'
 
@@ -92,13 +88,11 @@ class ProvisionedNetsStorage(object):
                                                           self.segmentation_id,
                                                           self.host_id)
 
-        def veos_representation(self):
-            segm_type = cfg.CONF.ARISTA_DRIVER['arista_segmentation_type']
-
+        def eos_representation(self, segmentation_type):
             return {u'hostId': self.host_id,
                     u'name': self.network_id,
                     u'segmentationId': self.segmentation_id,
-                    u'segmentationType': segm_type}
+                    u'segmentationType': segmentation_type}
 
     def initialize_db(self):
         db.configure_db()
@@ -198,9 +192,10 @@ class ProvisionedNetsStorage(object):
                                net['hostId'])
 
     def get_network_list(self):
-        """Returns all networks in vEOS-compatible format.
+        """Returns all networks in EOS-compatible format.
 
-        See AristaRPCWrapper.get_network_list() for return value format."""
+        See AristaRPCWrapper.get_network_list() for return value format.
+        """
         session = db.get_session()
         with session.begin():
             model = self.AristaProvisionedNets
@@ -215,7 +210,7 @@ class ProvisionedNetsStorage(object):
             for net in all_nets:
                 all_hosts = self.get_all_hosts_for_net(net.network_id)
                 hosts = [host.host_id for host in all_hosts]
-                res[net.network_id] = net.veos_representation()
+                res[net.network_id] = net.eos_representation(VLAN_SEGMENTATION)
                 res[net.network_id]['hostId'] = sorted(hosts)
             return res
 
@@ -223,19 +218,19 @@ class ProvisionedNetsStorage(object):
 class AristaRPCWrapper(object):
     """Wraps Arista JSON RPC.
 
-    vEOS - operating system used on Arista hardware
-    Command API - JSON RPC API provided by Arista vEOS
+    EOS - operating system used on Arista hardware
+    Command API - JSON RPC API provided by Arista EOS
     TOR - Top Of Rack switch, Arista HW switch
     """
-    required_options = ['arista_eapi_pass',
-                        'arista_eapi_host',
-                        'arista_eapi_user']
+    required_options = ['eapi_user',
+                        'eapi_pass',
+                        'eapi_host']
 
     def __init__(self):
         self._server = jsonrpclib.Server(self._eapi_host_url())
 
     def get_network_list(self):
-        """Returns dict of all networks known by vEOS.
+        """Returns dict of all networks known by EOS.
 
         :returns: dictionary with the following fields:
            {networkId:
@@ -309,7 +304,7 @@ class AristaRPCWrapper(object):
         command_end = ['exit']
         full_command = command_start + commands + command_end
 
-        LOG.info(_('Executing command on Arista vEOS: %s'), full_command)
+        LOG.info(_('Executing command on Arista EOS: %s'), full_command)
 
         ret = None
 
@@ -322,9 +317,9 @@ class AristaRPCWrapper(object):
             # 'management openstack' and 'exit' commands
             ret = ret[len(command_start):-len(command_end)]
         except Exception as error:
-            host = cfg.CONF.ARISTA_DRIVER.arista_eapi_host
+            host = cfg.CONF.ARISTA_DRIVER.eapi_host
             msg = _('Error %(error)s while trying to execute commands '
-                    '%(full_command)s on vEOS %(host)s') % locals()
+                    '%(full_command)s on EOS %(host)s') % locals()
             LOG.error(msg)
             raise AristaRpcError(msg=msg)
 
@@ -333,9 +328,9 @@ class AristaRPCWrapper(object):
     def _eapi_host_url(self):
         self._validate_config()
 
-        user = cfg.CONF.ARISTA_DRIVER.arista_eapi_user
-        pwd = cfg.CONF.ARISTA_DRIVER.arista_eapi_pass
-        host = cfg.CONF.ARISTA_DRIVER.arista_eapi_host
+        user = cfg.CONF.ARISTA_DRIVER.eapi_user
+        pwd = cfg.CONF.ARISTA_DRIVER.eapi_pass
+        host = cfg.CONF.ARISTA_DRIVER.eapi_host
 
         eapi_server_url = ('https://%(user)s:%(pwd)s@%(host)s/command-api' %
                            locals())
@@ -358,48 +353,48 @@ class SyncService(object):
         self._rpc = rpc_wrapper
 
     def synchronize(self):
-        """Sends data to vEOS which differs from neutron DB."""
-        LOG.info('Syncing Neutron  <-> vEOS')
+        """Sends data to EOS which differs from neutron DB."""
+        LOG.info('Syncing Neutron  <-> EOS')
         try:
-            veos_net_list = self._rpc.get_network_list()
+            eos_net_list = self._rpc.get_network_list()
         except AristaRpcError:
-            msg = _('vEOS is not available, will try sync later')
+            msg = _('EOS is not available, will try sync later')
             LOG.warning(msg)
             return
 
         db_net_list = self._db.get_network_list()
 
-        # do nothing if net lists are the same in neutron and on vEOS
-        if veos_net_list == db_net_list:
+        # do nothing if net lists are the same in neutron and on EOS
+        if eos_net_list == db_net_list:
             return
 
-        # delete network from vEOS if it is not present in neutron DB
-        for net_id in veos_net_list:
+        # delete network from EOS if it is not present in neutron DB
+        for net_id in eos_net_list:
             if net_id not in db_net_list:
                 self._rpc.delete_network(net_id)
 
         for net_id in db_net_list:
             db_net = db_net_list[net_id]
 
-            # update vEOS if network is present in neutron DB but does not
-            # exist on vEOS
-            if net_id not in veos_net_list:
+            # update EOS if network is present in neutron DB but does not
+            # exist on EOS
+            if net_id not in eos_net_list:
                 self._send_network_configuration(db_net_list, net_id)
             # if network exists, but hosts do not match
-            elif db_net != veos_net_list[net_id]:
-                veos_net = veos_net_list[net_id]
-                if db_net['hostId'] != veos_net['hostId']:
-                    self._plug_missing_hosts(net_id, db_net, veos_net)
+            elif db_net != eos_net_list[net_id]:
+                eos_net = eos_net_list[net_id]
+                if db_net['hostId'] != eos_net['hostId']:
+                    self._plug_missing_hosts(net_id, db_net, eos_net)
 
     def _send_network_configuration(self, db_net_list, net_id):
         segm_id = db_net_list[net_id]['segmentationId']
         for host in db_net_list[net_id]['hostId']:
             self._rpc.plug_host_into_vlan(net_id, segm_id, host)
 
-    def _plug_missing_hosts(self, net_id, db_net, veos_net):
+    def _plug_missing_hosts(self, net_id, db_net, eos_net):
         db_hosts = set(db_net['hostId'])
-        veos_hosts = set(veos_net['hostId'])
-        missing_hosts = db_hosts - veos_hosts
+        eos_hosts = set(eos_net['hostId'])
+        missing_hosts = db_hosts - eos_hosts
         vlan_id = db_net['segmentationId']
         for host in missing_hosts:
             self._rpc.plug_host_into_vlan(net_id, vlan_id, host)
@@ -408,8 +403,8 @@ class SyncService(object):
 class AristaDriver(driver_api.MechanismDriver):
     """Ml2 Mechanism driver for Arista networking hardware.
 
-    Currently works in VLAN mode only. Remembers all VLANs provisioned. Does
-    not send VLAN provisioning request if the VLAN has already been
+    Remebers all networks that are provisioned on Arista Hardware.
+    Does not send network provisioning request if the network has already been
     provisioned before for the given port.
     """
 
@@ -426,11 +421,10 @@ class AristaDriver(driver_api.MechanismDriver):
         self.net_storage.initialize_db()
 
         config = cfg.CONF.ARISTA_DRIVER
-        self.segmentation_type = config['arista_segmentation_type']
-
-        self.veos = SyncService(self.net_storage, self.rpc)
-        self.sync_timeout = config['arista_sync_interval']
-        self.veos_sync_lock = threading.Lock()
+        self.segmentation_type = VLAN_SEGMENTATION
+        self.eos = SyncService(self.net_storage, self.rpc)
+        self.sync_timeout = config['sync_interval']
+        self.eos_sync_lock = threading.Lock()
 
         self._synchronization_thread()
 
@@ -442,7 +436,7 @@ class AristaDriver(driver_api.MechanismDriver):
 	segments = context.network_segments()
         network_id = network['id']
         segmentation_id = segments[0]['segmentation_id']
-        with self.veos_sync_lock:
+        with self.eos_sync_lock:
             self.net_storage.remember_network(network_id, segmentation_id)
 
     def create_network_postcommit(self, context):
@@ -467,21 +461,21 @@ class AristaDriver(driver_api.MechanismDriver):
     def delete_network_precommit(self, context):
 	network = context.current()
         network_id = network['id']
-        with self.veos_sync_lock:
+        with self.eos_sync_lock:
             if self.net_storage.is_network_provisioned(network_id):
                 self.net_storage.forget_network(network_id)
 
     def delete_network_postcommit(self, context):
 	network = context.current()
         network_id = network['id']
-        with self.veos_sync_lock:
-            # Succeed deleting network in case vEOS is not accessible.
-            # vEOS state will be updated by sync thread once vEOS gets
+        with self.eos_sync_lock:
+            # Succeed deleting network in case EOS is not accessible.
+            # EOS state will be updated by sync thread once EOS gets
             # alive.
             try:
                 self.rpc.delete_network(network_id)
             except AristaRpcError:
-                msg = _('Unable to reach vEOS, will update it\'s state '
+                msg = _('Unable to reach EOS, will update it\'s state '
                         'during synchronization')
                 LOG.info(msg)
 
@@ -511,7 +505,8 @@ class AristaDriver(driver_api.MechanismDriver):
         self.create_port_precommit(context)
 
     def update_port_postcommit(self, context):
-        self.update_port_precommit(context)
+        # TODO(sukhdev) revisit once the port binding support is implemented
+        return
 
     def delete_port_precommit(self, context):
 	port = context.current()
@@ -527,7 +522,7 @@ class AristaDriver(driver_api.MechanismDriver):
         self.delete_port_precommit(context)
 
     def unplug_host(self, network_id, host_id):
-        with self.veos_sync_lock:
+        with self.eos_sync_lock:
             storage = self.net_storage
             hostname = self._host_name(host_id)
             segmentation_id = storage.get_segmentation_id(network_id)
@@ -542,7 +537,7 @@ class AristaDriver(driver_api.MechanismDriver):
                 storage.forget_host(network_id, hostname)
 
     def plug_host(self, network_id, host_id):
-        with self.veos_sync_lock:
+        with self.eos_sync_lock:
             s = self.net_storage
             hostname = self._host_name(host_id)
             segmentation_id = s.get_segmentation_id(network_id)
@@ -558,12 +553,12 @@ class AristaDriver(driver_api.MechanismDriver):
                 s.remember_host(network_id, segmentation_id, socket.gethostname())
 
     def _host_name(self, hostname):
-        fqdns_used = cfg.CONF.ARISTA_DRIVER['arista_use_fqdn']
+        fqdns_used = cfg.CONF.ARISTA_DRIVER['use_fqdn']
         return hostname if not fqdns_used else hostname.split('.')[0]
 
     def _synchronization_thread(self):
-        with self.veos_sync_lock:
-            self.veos.synchronize()
+        with self.eos_sync_lock:
+            self.eos.synchronize()
 
         t = threading.Timer(self.sync_timeout, self._synchronization_thread)
         t.start()
