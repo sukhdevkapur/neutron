@@ -14,19 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pdb
 import threading
 
 import jsonrpclib
-import sqlalchemy
 import socket
+import sqlalchemy
 
 import neutron.db.api as db
-from neutron.db import model_base
-from oslo.config import cfg
+
 from neutron.common import exceptions
-from neutron.plugins.ml2 import driver_api
+from neutron.db import model_base
 from neutron.openstack.common import log as logging
+from neutron.plugins.ml2 import driver_api
+from oslo.config import cfg
 
 VLAN_SEGMENTATION = 'vlan'
 
@@ -64,6 +64,7 @@ class AristaRpcError(exceptions.NeutronException):
 class AristaConfigError(exceptions.NeutronException):
     message = _('%(msg)s')
 
+
 class ProvisionedNetsStorage(object):
     class AristaProvisionedNets(model_base.BASEV2):
         """
@@ -81,7 +82,6 @@ class ProvisionedNetsStorage(object):
             self.network_id = network_id
             self.segmentation_id = segmentation_id
             self.host_id = host_id
-	    print  network_id, segmentation_id, host_id
 
         def __repr__(self):
             return "<AristaProvisionedNets(%s,%d,%s)>" % (self.network_id,
@@ -106,7 +106,9 @@ class ProvisionedNetsStorage(object):
             net = (session.query(self.AristaProvisionedNets).
                    filter_by(network_id=network_id).first())
 
-            if net and not net.segmentation_id and not net.host_id:
+            #if net and not net.segmentation_id and not net.host_id:
+            if net and (net.segmentation_id == segmentation_id) \
+               and not net.host_id:
                 net.segmentation_id = segmentation_id
                 net.host_id = host_id
             else:
@@ -192,8 +194,8 @@ class ProvisionedNetsStorage(object):
                                net['hostId'])
 
     def get_network_list(self):
-        """Returns all networks in EOS-compatible format.
-
+        """
+        Returns all networks in EOS-compatible format.
         See AristaRPCWrapper.get_network_list() for return value format.
         """
         session = db.get_session()
@@ -334,7 +336,6 @@ class AristaRPCWrapper(object):
 
         eapi_server_url = ('https://%(user)s:%(pwd)s@%(host)s/command-api' %
                            locals())
-
         return eapi_server_url
 
     def _validate_config(self):
@@ -345,7 +346,7 @@ class AristaRPCWrapper(object):
                 raise AristaConfigError(msg=msg)
 
 
-# TODO: add support for non-vlan mode (use checks before calling
+# TODO(sukhdev): add support for non-vlan mode (use checks before calling
 #       plug_host_Into_vlan())
 class SyncService(object):
     def __init__(self, net_storage, rpc_wrapper):
@@ -429,23 +430,22 @@ class AristaDriver(driver_api.MechanismDriver):
         self._synchronization_thread()
 
     def initialize(self):
-	pass
+        pass
 
     def create_network_precommit(self, context):
-	network = context.current()
-	segments = context.network_segments()
+        network = context.current()
+        segments = context.network_segments()
         network_id = network['id']
         segmentation_id = segments[0]['segmentation_id']
         with self.eos_sync_lock:
             self.net_storage.remember_network(network_id, segmentation_id)
 
     def create_network_postcommit(self, context):
-        """We do not need to do anything in the create_network. 
+        """We do not need to do anything in the create_network_postcommit.
         The real work is done in the create_network_precommit() method
         """
         pass
 
-    #def update_network_precommit(self, original_network, updated_network):
     def update_network_precommit(self, context):
         """We do not support update network yet.
         The real work is done in the create_network_precommit() method
@@ -459,14 +459,14 @@ class AristaDriver(driver_api.MechanismDriver):
         pass
 
     def delete_network_precommit(self, context):
-	network = context.current()
+        network = context.current()
         network_id = network['id']
         with self.eos_sync_lock:
             if self.net_storage.is_network_provisioned(network_id):
                 self.net_storage.forget_network(network_id)
 
     def delete_network_postcommit(self, context):
-	network = context.current()
+        network = context.current()
         network_id = network['id']
         with self.eos_sync_lock:
             # Succeed deleting network in case EOS is not accessible.
@@ -480,46 +480,42 @@ class AristaDriver(driver_api.MechanismDriver):
                 LOG.info(msg)
 
     def create_port_precommit(self, context):
-	port = context.current()
-        #p = port
-        #p = port['port']
-        #host = p.get(binding.HOST_ID)                                           
-        #device_id = p.get('device_id')                                               
-        #device_owner = p.get('device_owner')                                         
-        device_id = port['device_id']                                               
-        device_owner = port['device_owner']                                         
-        host = port['binding:host_id']                                           
-	#### Hack to test - must remove ######  Sukhdev
-	host = 'os-comp2'
+        port = context.current()
 
-        # device_id and device_owner are set on VM boot                              
-        is_vm_boot = device_id and device_owner                                      
-	if host and is_vm_boot:                                                      
-            network_id = port['network_id']                                             
+        device_id = port['device_id']
+        device_owner = port['device_owner']
+
+        # TODO(sukhdev) revisit this once port biniding support is implemented
+        host = port['binding:host_id']
+
+        # device_id and device_owner are set on VM boot
+        is_vm_boot = device_id and device_owner
+        if host and is_vm_boot:
+            network_id = port['network_id']
             self.plug_host(network_id, host)
 
     def create_port_postcommit(self, context):
-        self.create_port_precommit(context)
+        return
 
     def update_port_precommit(self, context):
-        self.create_port_precommit(context)
+        # TODO(sukhdev) revisit once the port binding support is implemented
+        return
 
     def update_port_postcommit(self, context):
         # TODO(sukhdev) revisit once the port binding support is implemented
         return
 
     def delete_port_precommit(self, context):
-	port = context.current()
-        #p = port['port']
-        #host = p.get(portbindings.HOST_ID)                                           
-        host = port['binding:host_id']                                           
-	#### Hack to test - must remove ######  Sukhdev
-	host = 'os-comp2'
-        network_id = port['network_id']                                             
+        port = context.current()
+
+        # TODO(sukhdev) revisit this once port biniding support is implemented
+        host = port['binding:host_id']
+
+        network_id = port['network_id']
         self.unplug_host(network_id, host)
 
     def delete_port_postcommit(self, context):
-        self.delete_port_precommit(context)
+        return
 
     def unplug_host(self, network_id, host_id):
         with self.eos_sync_lock:
@@ -550,7 +546,8 @@ class AristaDriver(driver_api.MechanismDriver):
                                                  segmentation_id,
                                                  hostname)
                 s.remember_host(network_id, segmentation_id, hostname)
-                s.remember_host(network_id, segmentation_id, socket.gethostname())
+                #s.remember_host(network_id, segmentation_id,
+                #                socket.gethostname())
 
     def _host_name(self, hostname):
         fqdns_used = cfg.CONF.ARISTA_DRIVER['use_fqdn']
@@ -562,9 +559,6 @@ class AristaDriver(driver_api.MechanismDriver):
 
         t = threading.Timer(self.sync_timeout, self._synchronization_thread)
         t.start()
-
-    #def _extract_segmentation_id(self, network):
-        #return self._segm_type_used(driver_api.VLAN_SEGMENTATION)
 
     def _vlans_used(self):
         return self._segm_type_used(VLAN_SEGMENTATION)
