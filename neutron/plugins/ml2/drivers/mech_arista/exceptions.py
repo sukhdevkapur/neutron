@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright (c) 2013 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,11 +18,10 @@
 
 from neutron.common import exceptions
 
+
 class AristaRpcError(exceptions.NeutronException):
     message = _('%(msg)s')
 
 
 class AristaConfigError(exceptions.NeutronException):
     message = _('%(msg)s')
-
-

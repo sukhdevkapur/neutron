@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # Copyright (c) 2013 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,15 +18,18 @@ from oslo.config import cfg
 
 """ Arista ML2 Mechanism driver specific configuration knobs.
 
-Following are user configurable options to for the better user
-experience as well control over the Arista Hardware. 
+Following are user configurable options for Arista ML2 Mechanism
+driver. The eapi_username, eapi_password, and eapi_host are
+required options. Region Name must be the same that is used by
+Keystone service. This option is available to support multiple
+OpenStack/Neutron controllers.
 """
 
 ARISTA_DRIVER_OPTS = [
-    cfg.StrOpt('eapi_user',
+    cfg.StrOpt('eapi_username',
                default=None,
                help=_('Username for Arista EOS')),
-    cfg.StrOpt('eapi_pass',
+    cfg.StrOpt('eapi_password',
                default=None,
                secret=True,  # do not expose value in the logs
                help=_('Password for Arista EOS')),
@@ -39,9 +41,10 @@ ARISTA_DRIVER_OPTS = [
                 help=_('Defines if hostnames are sent to Arista EOS as FQDNs '
                        '("node1.domain.com") or as short names ("node1")')),
     cfg.IntOpt('sync_interval',
-               default=10,
+               default=180,
                help=_('Sync interval in seconds between Neutron plugin and '
-                      'EOS')),
+                      'EOS. This interval defines how often the'
+                      'synchronization is performed')),
     cfg.StrOpt('region_name',
                default='RegionOne',
                help=_('Region name assigned to this OpenStack Controller '
@@ -50,5 +53,3 @@ ARISTA_DRIVER_OPTS = [
 ]
 
 cfg.CONF.register_opts(ARISTA_DRIVER_OPTS, "ARISTA_DRIVER")
-
-
