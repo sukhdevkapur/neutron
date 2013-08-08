@@ -57,7 +57,7 @@ class AristaRPCWrapper(object):
                   and VMs allocated per tenant
         """
         cmds = ['show openstack config region %s' % self.region]
-        command_output = self._run_openstack_cmd(cmds)
+        command_output = self._run_openstack_cmds(cmds)
         tenants = command_output[0]['tenants']
 
         return tenants
@@ -83,7 +83,7 @@ class AristaRPCWrapper(object):
                         (port_id, network_id))
         cmds.append('exit')
         cmds.append('exit')
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
     def unplug_host_from_network(self, vm_id, host, port_id,
                                  network_id, tenant_id):
@@ -100,7 +100,7 @@ class AristaRPCWrapper(object):
                 'no port id %s network-id %s' % (port_id, network_id),
                 'exit',
                 'exit']
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
     def create_network(self, tenant_id, network_id, network_name, seg_id):
         """Creates a network on Arista Hardware
@@ -120,7 +120,7 @@ class AristaRPCWrapper(object):
         cmds.append('exit')
         cmds.append('exit')
 
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
     def create_network_segments(self, tenant_id, network_id,
                                 network_name, segments):
@@ -147,7 +147,7 @@ class AristaRPCWrapper(object):
             cmds.append('exit')  # exit for network mode
             cmds.append('exit')  # exit for tenant mode
 
-            self._run_openstack_cmd(cmds)
+            self._run_openstack_cmds(cmds)
 
     def delete_network(self, tenant_id, network_id):
         """Deletes a specified network for a given tenant
@@ -159,7 +159,7 @@ class AristaRPCWrapper(object):
                 'no network id %s' % network_id,
                 'exit',
                 'exit']
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
     def delete_vm(self, tenant_id, vm_id):
         """Deletes a VM from EOS for a given tenant
@@ -171,7 +171,7 @@ class AristaRPCWrapper(object):
                 'no vm id %s' % vm_id,
                 'exit',
                 'exit']
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
     def delete_tenant(self, tenant_id):
         """Deletes a given tenant and all its networks and VMs from EOS.
@@ -179,7 +179,7 @@ class AristaRPCWrapper(object):
         :param tenant_id: globally unique neutron tenant identifier
         """
         cmds = ['no tenant %s' % tenant_id, 'exit']
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
     def delete_this_region(self):
         """Deletes this entire region from EOS.
@@ -188,7 +188,7 @@ class AristaRPCWrapper(object):
         All networks for all tenants are removed.
         """
         cmds = []
-        self._run_openstack_cmd(cmds, deleteRegion=True)
+        self._run_openstack_cmds(cmds, deleteRegion=True)
 
     def _register_with_eos(self):
         """This is the registration request with EOS.
@@ -201,11 +201,9 @@ class AristaRPCWrapper(object):
                 self.keystone_conf.admin_user,
                 self.keystone_conf.admin_password)]
 
-        self._run_openstack_cmd(cmds)
+        self._run_openstack_cmds(cmds)
 
-    def _run_openstack_cmd(self, commands, deleteRegion=None):
-        if type(commands) is not list:
-            commands = [commands]
+    def _run_openstack_cmds(self, commands, deleteRegion=None):
 
         command_start = ['enable', 'configure', 'management openstack']
         if deleteRegion:
@@ -647,7 +645,7 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def _host_name(self, hostname):
         fqdns_used = cfg.CONF.ARISTA_DRIVER['use_fqdn']
-        return hostname if not fqdns_used else hostname.split('.')[0]
+        return hostname if fqdns_used else hostname.split('.')[0]
 
     def _synchronization_thread(self):
         with self.eos_sync_lock:

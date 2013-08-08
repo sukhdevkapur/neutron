@@ -37,7 +37,7 @@ ARISTA_DRIVER_OPTS = [
                default=None,
                help=_('Arista EOS host IP')),
     cfg.BoolOpt('use_fqdn',
-                default=False,
+                default=True,
                 help=_('Defines if hostnames are sent to Arista EOS as FQDNs '
                        '("node1.domain.com") or as short names ("node1")')),
     cfg.IntOpt('sync_interval',

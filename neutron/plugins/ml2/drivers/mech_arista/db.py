@@ -24,21 +24,23 @@ from neutron.openstack.common import log as logging
 VLAN_SEGMENTATION = 'vlan'
 
 LOG = logging.getLogger(__name__)
+uuidLen = 36
+strLen = 255
 
 
 class ProvisionedNetsStorage(object):
     class AristaProvisionedNets(model_base.BASEV2):
         """Stores networks provisioned on Arista EOS.
 
-        Saves the segmentation ID for each the network that is provisioned
+        Saves the segmentation ID for each network that is provisioned
         on EOS. This information is used during synchronization between
         Neutron and EOS.
         """
         __tablename__ = 'arista_provisioned_nets'
 
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(36))
-        network_id = sqlalchemy.Column(sqlalchemy.String(36))
+        tenant_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        network_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
         segmentation_id = sqlalchemy.Column(sqlalchemy.Integer)
 
         def __init__(self, tenant_id, network_id, segmentation_id=None):
@@ -66,11 +68,11 @@ class ProvisionedNetsStorage(object):
         __tablename__ = 'arista_provisioned_vms'
 
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        vm_id = sqlalchemy.Column(sqlalchemy.String(36))
-        host_id = sqlalchemy.Column(sqlalchemy.String(255))
-        port_id = sqlalchemy.Column(sqlalchemy.String(36))
-        network_id = sqlalchemy.Column(sqlalchemy.String(36))
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(36))
+        vm_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        host_id = sqlalchemy.Column(sqlalchemy.String(strLen))
+        port_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        network_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        tenant_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
 
         def __init__(self, vm_id, host_id, port_id, network_id, tenant_id):
             self.vm_id = vm_id
@@ -101,12 +103,12 @@ class ProvisionedNetsStorage(object):
     class AristaProvisionedTenants(model_base.BASEV2):
         """Stores Tenants provisioned on Arista EOS.
 
-        Tenans list is maintained for sync between Neutron and EOS.
+        Tenants list is maintained for sync between Neutron and EOS.
         """
         __tablename__ = 'arista_provisioned_tenants'
 
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(36))
+        tenant_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
 
         def __init__(self, tenant_id):
             self.tenant_id = tenant_id
@@ -287,6 +289,19 @@ class ProvisionedNetsStorage(object):
                                       network_id=network_id,
                                       segmentation_id=seg_id).count())
             return num_nets > 0
+
+    def is_tenant_provisioned(self, tenant_id):
+        """Checks if a tenant is already known to EOS
+
+        :returns: True, if yes; False otherwise.
+        :param tenant_id: globally unique neutron tenant identifier
+        """
+        session = db.get_session()
+        with session.begin():
+            num_tenants = 0
+            num_tenants = (session.query(self.AristaProvisionedTenants).
+                           filter_by(tenant_id=tenant_id).count())
+            return num_tenants > 0
 
     def num_nets_provisioned(self, tenant_id):
         """Returns number of networks for a given tennat.

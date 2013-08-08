@@ -39,6 +39,312 @@ def setup_valid_config():
     setup_arista_wrapper_config('value')
 
 
+class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
+    """Test storing and retriving functionality of Arista mechanism driver.
+
+    Tests all methods of this class by invoking them seperately as well
+    as a goup.
+    """
+
+    def setUp(self):
+        super(AristaProvisionedVlansStorageTestCase, self).setUp()
+        self.drv = db.ProvisionedNetsStorage()
+        self.drv.initialize_db()
+
+    def tearDown(self):
+        super(AristaProvisionedVlansStorageTestCase, self).tearDown()
+        self.drv.tear_down()
+
+    def test_tenant_is_remembered(self):
+        tenant_id = 'test'
+
+        self.drv.remember_tenant(tenant_id)
+        net_provisioned = self.drv.is_tenant_provisioned(tenant_id)
+        self.assertTrue(net_provisioned, 'Tenant must be provisioned')
+
+    def test_tenant_is_removed(self):
+        tenant_id = 'test'
+
+        self.drv.remember_tenant(tenant_id)
+        self.drv.forget_tenant(tenant_id)
+
+        net_provisioned = self.drv.is_tenant_provisioned(tenant_id)
+
+        self.assertFalse(net_provisioned, 'The Tenant should be deleted')
+
+    def test_network_is_remembered(self):
+        tenant_id = 'test'
+        network_id = '123'
+        segmentation_id = 456
+
+        self.drv.remember_network(tenant_id, network_id, segmentation_id)
+        net_provisioned = self.drv.is_network_provisioned(tenant_id,
+                                                          network_id)
+        self.assertTrue(net_provisioned, 'Network must be provisioned')
+
+    def test_network_is_removed(self):
+        tenant_id = 'test'
+        network_id = '123'
+
+        self.drv.remember_network(tenant_id, network_id, '123')
+        self.drv.forget_network(tenant_id, network_id)
+
+        net_provisioned = self.drv.is_network_provisioned(tenant_id,
+                                                          network_id)
+
+        self.assertFalse(net_provisioned, 'The network should be deleted')
+
+    def test_vm_is_remembered(self):
+        vm_id = 'VM-1'
+        tenant_id = 'test'
+        network_id = '123'
+        port_id = 456
+        host_id = 'ubuntu1'
+
+        self.drv.remember_vm(vm_id, host_id, port_id,
+                             network_id, tenant_id)
+        vm_provisioned = self.drv.is_vm_provisioned(vm_id, host_id, port_id,
+                                                    network_id, tenant_id)
+        self.assertTrue(vm_provisioned, 'VM must be provisioned')
+
+    def test_vm_is_removed(self):
+        vm_id = 'VM-1'
+        tenant_id = 'test'
+        network_id = '123'
+        port_id = 456
+        host_id = 'ubuntu1'
+
+        self.drv.remember_vm(vm_id, host_id, port_id,
+                             network_id, tenant_id)
+        self.drv.forget_vm(vm_id, host_id, port_id,
+                           network_id, tenant_id)
+
+        vm_provisioned = self.drv.is_vm_provisioned(vm_id, host_id, port_id,
+                                                    network_id, tenant_id)
+
+        self.assertFalse(vm_provisioned, 'The vm should be deleted')
+
+    def test_remembers_multiple_networks(self):
+        tenant_id = 'test'
+        expected_num_nets = 100
+        nets = ['id%s' % n for n in range(expected_num_nets)]
+        for net_id in nets:
+            self.drv.remember_network(tenant_id, net_id, 123)
+
+        num_nets_provisioned = self.drv.num_nets_provisioned(tenant_id)
+
+        self.assertEqual(expected_num_nets, num_nets_provisioned,
+                         'There should be %(expected_num_nets)d '
+                         'nets, not %(num_nets_provisioned)d' % locals())
+
+    def test_removes_all_networks(self):
+        tenant_id = 'test'
+        num_nets = 100
+        nets = ['id%s' % n for n in range(num_nets)]
+        for net_id in nets:
+            self.drv.remember_network(tenant_id, net_id, 123)
+            self.drv.forget_network(tenant_id, net_id)
+
+        num_nets_provisioned = self.drv.num_nets_provisioned(tenant_id)
+        expected = 0
+
+        self.assertEqual(expected, num_nets_provisioned,
+                         'There should be %(expected)d '
+                         'nets, not %(num_nets_provisioned)d' % locals())
+
+    def test_remembers_multiple_tenants(self):
+        expected_num_tenants = 100
+        tenants = ['id%s' % n for n in range(expected_num_tenants)]
+        for tenant_id in tenants:
+            self.drv.remember_tenant(tenant_id)
+
+        num_tenants_provisioned = self.drv.num_provisioned_tenants()
+
+        self.assertEqual(expected_num_tenants, num_tenants_provisioned,
+                         'There should be %(expected_num_tenants)d '
+                         'tenants, not %(num_tenants_provisioned)d' % locals())
+
+    def test_removes_multiple_tenants(self):
+        num_tenants = 100
+        tenants = ['id%s' % n for n in range(num_tenants)]
+        for tenant_id in tenants:
+            self.drv.remember_tenant(tenant_id)
+        for tenant_id in tenants:
+            self.drv.forget_tenant(tenant_id)
+
+        num_tenants_provisioned = self.drv.num_provisioned_tenants()
+
+        expected = 0
+
+        self.assertEqual(expected, num_tenants_provisioned,
+                         'There should be %(expected)d '
+                         'tenants, not %(num_tenants_provisioned)d' % locals())
+
+    def test_num_vm_is_valid(self):
+        tenant_id = 'test'
+        network_id = '123'
+        port_id = 456
+        host_id = 'ubuntu1'
+
+        vm_to_remember = ['vm1', 'vm2', 'vm3']
+        vm_to_forget = ['vm2', 'vm1']
+
+        for vm in vm_to_remember:
+            self.drv.remember_vm(vm, host_id, port_id,
+                                 network_id, tenant_id)
+        for vm in vm_to_forget:
+            self.drv.forget_vm(vm, host_id, port_id,
+                               network_id, tenant_id)
+
+        num_vms = len(self.drv.get_vm_list(tenant_id))
+        expected = len(vm_to_remember) - len(vm_to_forget)
+
+        self.assertEqual(expected, num_vms,
+                         'There should be %(expected)d records, '
+                         'got %(num_vms)d records' % locals())
+
+    def test_get_network_list_returns_eos_compatible_data(self):
+        tenant = 'test-1'
+        segm_type = 'vlan'
+        network_id = '123'
+        network2_id = '1234'
+        vlan_id = 123
+        vlan2_id = 1234
+        expected_eos_net_list = {network_id: {'networkId': network_id,
+                                              'segmentationTypeId': vlan_id,
+                                              'segmentationType': segm_type},
+                                 network2_id: {'networkId': network2_id,
+                                               'segmentationTypeId': vlan2_id,
+                                               'segmentationType': segm_type}}
+
+        self.drv.remember_network(tenant, network_id, vlan_id)
+        self.drv.remember_network(tenant, network2_id, vlan2_id)
+
+        net_list = self.drv.get_network_list(tenant)
+
+        self.assertTrue(net_list == expected_eos_net_list,
+                        ('%(net_list)s != %(expected_eos_net_list)s' %
+                         locals()))
+
+
+class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
+    """Test cases to test the RPC between Arista Driver and EOS.
+
+    Tests all methods used to send commands between Arista Driver and EOS
+    """
+
+    def setUp(self):
+        super(PositiveRPCWrapperValidConfigTestCase, self).setUp()
+        setup_valid_config()
+        self.drv = arista.AristaRPCWrapper()
+        self.drv._server = mock.MagicMock()
+
+    def tearDown(self):
+        super(PositiveRPCWrapperValidConfigTestCase, self).tearDown()
+        clear_config()
+
+    def test_no_exception_on_correct_configuration(self):
+        self.assertNotEqual(self.drv, None)
+
+    def test_plug_host_into_network(self):
+        tenant_id = 'ten-1'
+        vm_id = 'vm-1'
+        port_id = 123
+        network_id = 'net-id'
+        host = 'host'
+        port_name = '123-port'
+
+        self.drv.plug_host_into_network(vm_id, host, port_id,
+                                        network_id, tenant_id, port_name)
+        cmds = ['enable', 'configure', 'management openstack',
+                'region RegionOne',
+                'tenant ten-1', 'vm id vm-1 hostid host',
+                'port id 123 name 123-port network-id net-id',
+                'exit', 'exit', 'exit', 'exit']
+
+        self.drv._server.runCmds.assert_called_once_with(version=1, cmds=cmds)
+
+    def test_unplug_host_from_network(self):
+        tenant_id = 'ten-1'
+        vm_id = 'vm-1'
+        port_id = 123
+        network_id = 'net-id'
+        host = 'host'
+        self.drv.unplug_host_from_network(vm_id, host, port_id,
+                                          network_id, tenant_id)
+        cmds = ['enable', 'configure', 'management openstack',
+                'region RegionOne',
+                'tenant ten-1', 'vm id vm-1 host host',
+                'no port id 123 network-id net-id',
+                'exit', 'exit', 'exit', 'exit']
+        self.drv._server.runCmds.assert_called_once_with(version=1, cmds=cmds)
+
+    def test_create_network(self):
+        tenant_id = 'ten-1'
+        network_id = 'net-id'
+        network_name = 'net-name'
+        vlan_id = 123
+        self.drv.create_network(tenant_id, network_id, network_name, vlan_id)
+        cmds = ['enable', 'configure', 'management openstack',
+                'region RegionOne',
+                'tenant ten-1', 'network id net-id name net-name',
+                'segment 1 type vlan id 123',
+                'exit', 'exit', 'exit', 'exit', 'exit']
+        self.drv._server.runCmds.assert_called_once_with(version=1, cmds=cmds)
+
+    def test_delete_network(self):
+        tenant_id = 'ten-1'
+        network_id = 'net-id'
+        self.drv.delete_network(tenant_id, network_id)
+        cmds = ['enable', 'configure', 'management openstack',
+                'region RegionOne',
+                'tenant ten-1', 'no network id net-id',
+                'exit', 'exit', 'exit', 'exit']
+        self.drv._server.runCmds.assert_called_once_with(version=1, cmds=cmds)
+
+    def test_delete_vm(self):
+        tenant_id = 'ten-1'
+        vm_id = 'vm-id'
+        self.drv.delete_vm(tenant_id, vm_id)
+        cmds = ['enable', 'configure', 'management openstack',
+                'region RegionOne',
+                'tenant ten-1', 'no vm id vm-id',
+                'exit', 'exit', 'exit', 'exit']
+        self.drv._server.runCmds.assert_called_once_with(version=1, cmds=cmds)
+
+    def test_delete_tenant(self):
+        tenant_id = 'ten-1'
+        self.drv.delete_tenant(tenant_id)
+        cmds = ['enable', 'configure', 'management openstack',
+                'region RegionOne', 'no tenant ten-1',
+                'exit', 'exit', 'exit']
+        self.drv._server.runCmds.assert_called_once_with(version=1, cmds=cmds)
+
+    def test_get_network_info_returns_none_when_no_such_net(self):
+        expected = []
+        self.drv.get_tenants_list = mock.MagicMock()
+        self.drv.get_tenants_list.return_value = []
+
+        net_info = self.drv.get_tenants_list()
+
+        self.drv.get_tenants_list.assert_called_once_with()
+        self.assertEqual(net_info, expected, ('Network info must be "None"'
+                                              'for unknown network'))
+
+    def test_get_network_info_returns_info_for_available_net(self):
+        valid_network_id = '12345'
+        valid_net_info = {'network_id': valid_network_id,
+                          'some_info': 'net info'}
+        known_nets = valid_net_info
+
+        self.drv.get_tenants_list = mock.MagicMock()
+        self.drv.get_tenants_list.return_value = known_nets
+
+        net_info = self.drv.get_tenants_list()
+        self.assertEqual(net_info, valid_net_info,
+                         ('Must return network info for a valid net'))
+
+
 class AristaRPCWrapperInvalidConfigTestCase(base.BaseTestCase):
     """Negative test cases to test the Arista Driver configuration."""
 
@@ -223,6 +529,11 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
 
 
 class fake_keystone_info_class:
+    """To generate fake Keystone Authentification token information
+
+    Arista Driver expects Keystone auth info. This fake information
+    is for testing only
+    """
     auth_protocol = 'abc'
     auth_host = 'host'
     auth_port = 5000
