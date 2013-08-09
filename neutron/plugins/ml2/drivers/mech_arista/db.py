@@ -24,8 +24,8 @@ from neutron.openstack.common import log as logging
 VLAN_SEGMENTATION = 'vlan'
 
 LOG = logging.getLogger(__name__)
-uuidLen = 36
-strLen = 255
+UUID_LEN = 36
+STR_LEN = 255
 
 
 class ProvisionedNetsStorage(object):
@@ -39,8 +39,8 @@ class ProvisionedNetsStorage(object):
         __tablename__ = 'arista_provisioned_nets'
 
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
-        network_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        tenant_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
+        network_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
         segmentation_id = sqlalchemy.Column(sqlalchemy.Integer)
 
         def __init__(self, tenant_id, network_id, segmentation_id=None):
@@ -68,11 +68,11 @@ class ProvisionedNetsStorage(object):
         __tablename__ = 'arista_provisioned_vms'
 
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        vm_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
-        host_id = sqlalchemy.Column(sqlalchemy.String(strLen))
-        port_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
-        network_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        vm_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
+        host_id = sqlalchemy.Column(sqlalchemy.String(STR_LEN))
+        port_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
+        network_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
+        tenant_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
 
         def __init__(self, vm_id, host_id, port_id, network_id, tenant_id):
             self.vm_id = vm_id
@@ -108,7 +108,7 @@ class ProvisionedNetsStorage(object):
         __tablename__ = 'arista_provisioned_tenants'
 
         id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(uuidLen))
+        tenant_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
 
         def __init__(self, tenant_id):
             self.tenant_id = tenant_id

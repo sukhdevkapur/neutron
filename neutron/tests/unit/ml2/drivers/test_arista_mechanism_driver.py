@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#import copy
 import mock
 
 from neutron.plugins.ml2.drivers.mech_arista import db
@@ -237,6 +236,7 @@ class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
         super(PositiveRPCWrapperValidConfigTestCase, self).setUp()
         setup_valid_config()
         self.drv = arista.AristaRPCWrapper()
+        self.region = 'RegionOne'
         self.drv._server = mock.MagicMock()
 
     def tearDown(self):

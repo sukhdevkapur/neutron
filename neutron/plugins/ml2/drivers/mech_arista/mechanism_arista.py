@@ -297,8 +297,6 @@ class SyncService(object):
         # to ensure that networks and VMs match on both sides for
         # each tenant.
         for tenant in db_tenants:
-            neutron_nets = self._ndb._get_all_networks()
-            neutron_ports = self._ndb._get_all_ports()
             db_net_list = self._db.get_network_list(tenant)
             db_vm_list = self._db.get_vm_list(tenant)
             eos_net_list = self._get_eos_network_list(eos_tenants, tenant)
@@ -312,7 +310,9 @@ class SyncService(object):
                     # Nothing to do. Everything is in sync for this tenant
                     break
 
-            # Here if some sort of synchronization is required.
+            # Neutron DB and EOS reruires synchronization.
+            neutron_nets = self._ndb._get_all_networks()
+            neutron_ports = self._ndb._get_all_ports()
 
             # First delete anything which should not be EOS
             # delete VMs from EOS if it is not present in neutron DB
