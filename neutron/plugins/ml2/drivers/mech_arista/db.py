@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import neutron.db.api as db
-import sqlalchemy
+import sqlalchemy as sa
 
 from neutron import context as nctx
+import neutron.db.api as db
 from neutron.db import db_base_plugin_v2
 from neutron.db import model_base
+from neutron.db import models_v2
 from neutron.openstack.common import log as logging
 
 VLAN_SEGMENTATION = 'vlan'
@@ -29,7 +30,8 @@ STR_LEN = 255
 
 
 class ProvisionedNetsStorage(object):
-    class AristaProvisionedNets(model_base.BASEV2):
+    class AristaProvisionedNets(model_base.BASEV2, models_v2.HasId,
+                                models_v2.HasTenant):
         """Stores networks provisioned on Arista EOS.
 
         Saves the segmentation ID for each network that is provisioned
@@ -38,10 +40,8 @@ class ProvisionedNetsStorage(object):
         """
         __tablename__ = 'arista_provisioned_nets'
 
-        id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
-        network_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
-        segmentation_id = sqlalchemy.Column(sqlalchemy.Integer)
+        network_id = sa.Column(sa.String(UUID_LEN))
+        segmentation_id = sa.Column(sa.Integer)
 
         def __init__(self, tenant_id, network_id, segmentation_id=None):
             self.tenant_id = tenant_id
@@ -59,7 +59,8 @@ class ProvisionedNetsStorage(object):
                     u'segmentationTypeId': self.segmentation_id,
                     u'segmentationType': segmentation_type}
 
-    class AristaProvisionedVms(model_base.BASEV2):
+    class AristaProvisionedVms(model_base.BASEV2, models_v2.HasId,
+                               models_v2.HasTenant):
         """Stores VMs provisioned on Arista EOS.
 
         All VMs launched on physical hosts connected to Arista
@@ -67,12 +68,10 @@ class ProvisionedNetsStorage(object):
         """
         __tablename__ = 'arista_provisioned_vms'
 
-        id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        vm_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
-        host_id = sqlalchemy.Column(sqlalchemy.String(STR_LEN))
-        port_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
-        network_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
+        vm_id = sa.Column(sa.String(UUID_LEN))
+        host_id = sa.Column(sa.String(STR_LEN))
+        port_id = sa.Column(sa.String(UUID_LEN))
+        network_id = sa.Column(sa.String(UUID_LEN))
 
         def __init__(self, vm_id, host_id, port_id, network_id, tenant_id):
             self.vm_id = vm_id
@@ -92,7 +91,7 @@ class ProvisionedNetsStorage(object):
             return {u'vmId': self.vm_id,
                     u'host': self.host_id,
                     u'ports': {self.port_id: [{u'portId': self.port_id,
-                    u'networkId': self.network_id}]}}
+                                              u'networkId': self.network_id}]}}
 
         def eos_port_representation(self):
             return {u'vmId': self.vm_id,
@@ -100,15 +99,13 @@ class ProvisionedNetsStorage(object):
                     u'portId': self.port_id,
                     u'networkId': self.network_id}
 
-    class AristaProvisionedTenants(model_base.BASEV2):
+    class AristaProvisionedTenants(model_base.BASEV2, models_v2.HasId,
+                                   models_v2.HasTenant):
         """Stores Tenants provisioned on Arista EOS.
 
         Tenants list is maintained for sync between Neutron and EOS.
         """
         __tablename__ = 'arista_provisioned_tenants'
-
-        id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-        tenant_id = sqlalchemy.Column(sqlalchemy.String(UUID_LEN))
 
         def __init__(self, tenant_id):
             self.tenant_id = tenant_id
@@ -122,9 +119,6 @@ class ProvisionedNetsStorage(object):
     def initialize_db(self):
         db.configure_db()
 
-    def tear_down(self):
-        db.clear_db()
-
     def remember_tenant(self, tenant_id):
         """Stores a tenant information in repository.
 
@@ -137,7 +131,6 @@ class ProvisionedNetsStorage(object):
 
             if not tenant:
                 tenant = self.AristaProvisionedTenants(tenant_id)
-                tenant.tenant_id = tenant_id
                 session.add(tenant)
 
     def forget_tenant(self, tenant_id):
@@ -153,7 +146,6 @@ class ProvisionedNetsStorage(object):
 
     def get_all_tenants(self):
         """Returns a list of all tenants stored in repository."""
-
         session = db.get_session()
         with session.begin():
             return session.query(self.AristaProvisionedTenants).all()
@@ -216,9 +208,8 @@ class ProvisionedNetsStorage(object):
                              network_id=network_id).first())
 
             if not net:
-                net = self.AristaProvisionedNets(tenant_id, network_id)
-                net.network_id = network_id
-                net.segmentation_id = segmentation_id
+                net = self.AristaProvisionedNets(tenant_id, network_id,
+                                                 segmentation_id)
                 session.add(net)
 
     def forget_network(self, tenant_id, network_id):
@@ -259,7 +250,6 @@ class ProvisionedNetsStorage(object):
         """
         session = db.get_session()
         with session.begin():
-            num_vm = 0
             num_vm = (session.query(self.AristaProvisionedVms).
                       filter_by(tenant_id=tenant_id,
                                 vm_id=vm_id,
@@ -278,7 +268,6 @@ class ProvisionedNetsStorage(object):
         """
         session = db.get_session()
         with session.begin():
-            num_nets = 0
             if not seg_id:
                 num_nets = (session.query(self.AristaProvisionedNets).
                             filter_by(tenant_id=tenant_id,
@@ -296,12 +285,12 @@ class ProvisionedNetsStorage(object):
         :returns: True, if yes; False otherwise.
         :param tenant_id: globally unique neutron tenant identifier
         """
+        num_tenants = 0
         session = db.get_session()
         with session.begin():
-            num_tenants = 0
             num_tenants = (session.query(self.AristaProvisionedTenants).
                            filter_by(tenant_id=tenant_id).count())
-            return num_tenants > 0
+        return num_tenants > 0
 
     def num_nets_provisioned(self, tenant_id):
         """Returns number of networks for a given tennat.
@@ -313,7 +302,7 @@ class ProvisionedNetsStorage(object):
             return (session.query(self.AristaProvisionedNets).
                     filter_by(tenant_id=tenant_id).count())
 
-    def get_network_list(self, tenant_id):
+    def get_networks(self, tenant_id):
         """Returns all networks for a given tenant in EOS-compatible format.
 
         See AristaRPCWrapper.get_network_list() for return value format.
@@ -327,15 +316,14 @@ class ProvisionedNetsStorage(object):
             none = None
             all_nets = (session.query(model).
                         filter(model.tenant_id != none).
-                        filter(model.segmentation_id != none).
-                        all())
+                        filter(model.segmentation_id != none))
             res = {}
             for net in all_nets:
-                res[net.network_id] = \
-                    net.eos_network_representation(VLAN_SEGMENTATION)
+                res[net.network_id] = net.eos_network_representation(
+                    VLAN_SEGMENTATION)
             return res
 
-    def get_vm_list(self, tenant_id):
+    def get_vms(self, tenant_id):
         """Returns all VMs for a given tenant in EOS-compatible format.
 
         :param tenant_id: globally unique neutron tenant identifier
@@ -351,14 +339,13 @@ class ProvisionedNetsStorage(object):
                        filter(model.host_id != none).
                        filter(model.vm_id != none).
                        filter(model.network_id != none).
-                       filter(model.port_id != none).
-                       all())
+                       filter(model.port_id != none))
             res = {}
             for vm in all_vms:
                 res[vm.vm_id] = vm.eos_vm_representation()
             return res
 
-    def get_port_list(self, tenant_id):
+    def get_ports(self, tenant_id):
         """Returns all ports of VMs in EOS-compatible format.
 
         :param tenant_id: globally unique neutron tenant identifier
@@ -374,20 +361,18 @@ class ProvisionedNetsStorage(object):
                          filter(model.host_id != none).
                          filter(model.vm_id != none).
                          filter(model.network_id != none).
-                         filter(model.port_id != none).
-                         all())
+                         filter(model.port_id != none))
             res = {}
             for port in all_ports:
                 res[port.port_id] = port.eos_port_representation()
             return res
 
-    def get_tenant_list(self):
+    def get_tenants(self):
         """Returns list of all tenants in EOS-compatible format."""
-
         session = db.get_session()
         with session.begin():
             model = self.AristaProvisionedTenants
-            all_tenants = (session.query(model).all())
+            all_tenants = session.query(model)
             res = {}
             for tenant in all_tenants:
                 res[tenant.tenant_id] = tenant.eos_tenant_representation()
@@ -406,25 +391,32 @@ class NeutronNets(db_base_plugin_v2.NeutronDbPluginV2):
 
     def __init__(self):
         self.admin_ctx = nctx.get_admin_context()
-        self.networks = []
-        self.ports = []
 
-    def _get_all_networks(self):
-        all_networks = \
-            super(NeutronNets, self).get_networks(self.admin_ctx)
-        return all_networks
+    def get_network_name(self, tenant_id, network_id):
+        network = self._get_network(tenant_id, network_id)
+        network_name = None
+        if network:
+            network_name = network[0]['name']
+        return network_name
 
-    def _get_networks_count(self):
-        networks_count = \
-            super(NeutronNets, self).get_networks_count(self.admin_ctx)
-        return networks_count
+    def get_all_networks_for_tenant(self, tenant_id):
+        filters = {'tenant_id': [tenant_id]}
+        return super(NeutronNets,
+                     self).get_networks(self.admin_ctx, filters=filters) or []
 
-    def _get_all_ports(self):
-        all_ports = \
-            super(NeutronNets, self).get_ports(self.admin_ctx)
-        return all_ports
+    def get_all_ports_for_tenant(self, tenant_id):
+        filters = {'tenant_id': [tenant_id]}
+        return super(NeutronNets,
+                     self).get_ports(self.admin_ctx, filters=filters) or []
 
-    def _get_ports_count(self):
-        port_count = \
-            super(NeutronNets, self).get_ports_count(self.admin_ctx)
-        return port_count
+    def get_all_ports_for_vm(self, tenant_id, vm_id):
+        filters = {'tenant_id': [tenant_id],
+                   'device_id': [vm_id]}
+        return super(NeutronNets,
+                     self).get_ports(self.admin_ctx, filters=filters) or []
+
+    def _get_network(self, tenant_id, network_id):
+        filters = {'tenant_id': [tenant_id],
+                   'id': [network_id]}
+        return super(NeutronNets,
+                     self).get_networks(self.admin_ctx, filters=filters) or []

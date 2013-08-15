@@ -13,18 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import jsonrpclib
 import threading
+
+import jsonrpclib
+from oslo.config import cfg
 
 from neutron.openstack.common import log as logging
 from neutron.plugins.ml2 import driver_api
 from neutron.plugins.ml2.drivers.mech_arista import config  # noqa
 from neutron.plugins.ml2.drivers.mech_arista import db
 from neutron.plugins.ml2.drivers.mech_arista import exceptions as arista_exc
-from oslo.config import cfg
-
 
 LOG = logging.getLogger(__name__)
+
+EOS_UNREACHABLE_MSG = ('Unable to reach EOS, will update it\'s state '
+                       'during synchronization')
 
 
 class AristaRPCWrapper(object):
@@ -44,13 +47,13 @@ class AristaRPCWrapper(object):
         self.region = cfg.CONF.ARISTA_DRIVER.region_name
 
     def _keystone_url(self):
-        keystone_auth_url = '%s://%s:%s/v2.0/' % \
-                            (self.keystone_conf.auth_protocol,
-                             self.keystone_conf.auth_host,
-                             self.keystone_conf.auth_port)
+        keystone_auth_url = ('%s://%s:%s/v2.0/' %
+                             (self.keystone_conf.auth_protocol,
+                              self.keystone_conf.auth_host,
+                              self.keystone_conf.auth_port))
         return keystone_auth_url
 
-    def get_tenants_list(self):
+    def get_tenants(self):
         """Returns dict of all tanants known by EOS.
 
         :returns: dictionary containing the networks per tenant
@@ -204,7 +207,14 @@ class AristaRPCWrapper(object):
         self._run_openstack_cmds(cmds)
 
     def _run_openstack_cmds(self, commands, deleteRegion=None):
+        """Execute/sends a CAPI (Command API) command to EOS.
 
+        In this method, list of commands is appended with prefix and
+        postfix commands - to make is understandble by EOS.
+
+        :param commands : List of command to be executed on EOS.
+        :param deleteRegion : True/False - to delte entire region from EOS
+        """
         command_start = ['enable', 'configure', 'management openstack']
         if deleteRegion:
             command_start.append('no region %s' % self.region)
@@ -270,20 +280,23 @@ class SyncService(object):
 
         LOG.info('Syncing Neutron  <-> EOS')
         try:
-            eos_tenants = self._rpc.get_tenants_list()
+            eos_tenants = self._rpc.get_tenants()
         except arista_exc.AristaRpcError:
             msg = _('EOS is not available, will try sync later')
             LOG.warning(msg)
             return
 
-        db_tenants = self._db.get_tenant_list()
+        db_tenants = self._db.get_tenants()
 
         if not db_tenants and eos_tenants:
             # No tenants configured in Neutron. Clear all EOS state
-            self._rpc.delete_this_region()
-            msg = _('No Tenants configured in Neutron DB. But %d '
-                    'tenants disovered in EOS during synchronization.'
-                    'Enitre EOS region is cleared') % len(eos_tenants)
+            try:
+                self._rpc.delete_this_region()
+                msg = _('No Tenants configured in Neutron DB. But %d '
+                        'tenants disovered in EOS during synchronization.'
+                        'Enitre EOS region is cleared') % len(eos_tenants)
+            except arista_exc.AristaRpcError:
+                msg = _('EOS is not available, failed to delete this region')
             LOG.warning(msg)
             return
 
@@ -291,100 +304,103 @@ class SyncService(object):
             # EOS has extra tenants configured which should not be there.
             for tenant in eos_tenants:
                 if tenant not in db_tenants:
-                    self._rpc.delete_tenant(tenant)
+                    try:
+                        self._rpc.delete_tenant(tenant)
+                    except arista_exc.AristaRpcError:
+                        msg = _('EOS is not available,'
+                                'failed to delete tenant %s') % tenant
+                        LOG.warning(msg)
+                        return
 
         # EOS and Neutron has matching set of tenants. Now check
         # to ensure that networks and VMs match on both sides for
         # each tenant.
         for tenant in db_tenants:
-            db_net_list = self._db.get_network_list(tenant)
-            db_vm_list = self._db.get_vm_list(tenant)
-            eos_net_list = self._get_eos_network_list(eos_tenants, tenant)
-            eos_vm_list = self._get_eos_vm_list(eos_tenants, tenant)
+            db_nets = self._db.get_networks(tenant)
+            db_vms = self._db.get_vms(tenant)
+            eos_nets = self._get_eos_networks(eos_tenants, tenant)
+            eos_vms = self._get_eos_vms(eos_tenants, tenant)
 
             # Check for the case if everything is already in sync.
-            if eos_net_list == db_net_list:
+            if eos_nets == db_nets:
                 # Net list is same in both Neutron and EOS.
                 # check the vM list
-                if eos_vm_list == db_vm_list:
+                if eos_vms == db_vms:
                     # Nothing to do. Everything is in sync for this tenant
                     break
 
             # Neutron DB and EOS reruires synchronization.
-            neutron_nets = self._ndb._get_all_networks()
-            neutron_ports = self._ndb._get_all_ports()
-
             # First delete anything which should not be EOS
             # delete VMs from EOS if it is not present in neutron DB
-            for vm_id in eos_vm_list:
-                if vm_id not in db_vm_list:
-                    vm = eos_vm_list[vm_id]
-                    self._rpc.delete_vm(tenant, vm_id)
+            for vm_id in eos_vms:
+                if vm_id not in db_vms:
+                    vm = eos_vms[vm_id]
+                    try:
+                        self._rpc.delete_vm(tenant, vm_id)
+                    except arista_exc.AristaRpcError:
+                        msg = _('EOS is not available,'
+                                'failed to delete vm %s') % vm_id
+                        LOG.warning(msg)
+                        return
 
             # delete network from EOS if it is not present in neutron DB
-            for net_id in eos_net_list:
-                if net_id not in db_net_list:
-                    self._rpc.delete_network(tenant, net_id)
+            for net_id in eos_nets:
+                if net_id not in db_nets:
+                    try:
+                        self._rpc.delete_network(tenant, net_id)
+                    except arista_exc.AristaRpcError:
+                        msg = _('EOS is not available,'
+                                'failed to delete network %s') % net_id
+                        LOG.warning(msg)
+                        return
 
             # update networks in EOS if it is present in neutron DB
-            for net_id in db_net_list:
-                if net_id not in eos_net_list:
-                    vlan_id = db_net_list[net_id]['segmentationTypeId']
-                    net_name = self._get_network_name(neutron_nets, net_id)
-                    self._rpc.create_network(tenant, net_id,
-                                             net_name,
-                                             vlan_id)
+            for net_id in db_nets:
+                if net_id not in eos_nets:
+                    vlan_id = db_nets[net_id]['segmentationTypeId']
+                    net_name = self._ndb.get_network_name(tenant, net_id)
+                    try:
+                        self._rpc.create_network(tenant, net_id,
+                                                 net_name,
+                                                 vlan_id)
+                    except arista_exc.AristaRpcError:
+                        msg = _('EOS is not available, failed to create'
+                                'network id %s') % net_id
+                        LOG.warning(msg)
+                        return
 
             # Update VMs in EOS if it is present in neutron DB
-            for vm_id in db_vm_list:
-                if vm_id not in eos_vm_list:
-                    vm = db_vm_list[vm_id]
-                    ports = self._get_ports_for_vm(neutron_ports, vm_id)
+            for vm_id in db_vms:
+                if vm_id not in eos_vms:
+                    vm = db_vms[vm_id]
+                    ports = self._ndb.get_all_ports_for_vm(tenant, vm_id)
                     for port in ports:
                         port_id = port['id']
                         network_id = port['network_id']
                         port_name = port['name']
-                        self._rpc.plug_host_into_network(vm['vmId'],
-                                                         vm['host'],
-                                                         port_id,
-                                                         network_id,
-                                                         tenant,
-                                                         port_name)
+                        try:
+                            self._rpc.plug_host_into_network(vm['vmId'],
+                                                             vm['host'],
+                                                             port_id,
+                                                             network_id,
+                                                             tenant,
+                                                             port_name)
+                        except arista_exc.AristaRpcError:
+                            msg = _('EOS is not available, failed to create'
+                                    'vm id %s') % vm['vmId']
+                            LOG.warning(msg)
 
-    def _get_network_name(self, neutron_nets, network_id):
-        network_name = None
-        for network in neutron_nets:
-            if network['id'] == network_id:
-                network_name = network['name']
-                break
-        return network_name
-
-    def _get_port_name(self, neutron_ports, port_id, network_id):
-        port_name = None
-        for port in neutron_ports:
-            if port['id'] == port_id and port['network_id'] == network_id:
-                port_name = port['name']
-                break
-        return port_name
-
-    def _get_eos_network_list(self, eos_tenants, tenant):
-        tenants = []
+    def _get_eos_networks(self, eos_tenants, tenant):
+        networks = {}
         if eos_tenants:
-            tenants = eos_tenants[tenant]['tenantNetworks']
-        return tenants
+            networks = eos_tenants[tenant]['tenantNetworks']
+        return networks
 
-    def _get_eos_vm_list(self, eos_tenants, tenant):
-        vms = []
+    def _get_eos_vms(self, eos_tenants, tenant):
+        vms = {}
         if eos_tenants:
             vms = eos_tenants[tenant]['tenantVmInstances']
         return vms
-
-    def _get_ports_for_vm(self, neutron_ports, vm_id):
-        ports = []
-        for port in neutron_ports:
-            if port['device_id'] == vm_id:
-                ports.append(port)
-        return ports
 
 
 class AristaDriver(driver_api.MechanismDriver):
@@ -394,16 +410,10 @@ class AristaDriver(driver_api.MechanismDriver):
     Does not send network provisioning request if the network has already been
     provisioned before for the given port.
     """
-
     def __init__(self, rpc=None, net_storage=db.ProvisionedNetsStorage()):
 
-        if rpc is None:
-            self.rpc = AristaRPCWrapper()
-        else:
-            self.rpc = rpc
-
+        self.rpc = rpc or AristaRPCWrapper()
         self.ndb = db.NeutronNets()
-
         self.net_storage = net_storage
         self.net_storage.initialize_db()
 
@@ -449,9 +459,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                             network_name,
                                             vlan_id)
                 except arista_exc.AristaRpcError:
-                    msg = _('Unable to reach EOS, will update it\'s state '
-                            'during synchronization')
-                    LOG.info(msg)
+                    LOG.info(EOS_UNREACHABLE_MSG)
 
     def update_network_precommit(self, context):
         """At the moment we only support network name change
@@ -488,13 +496,10 @@ class AristaDriver(driver_api.MechanismDriver):
                                                 network_name,
                                                 vlan_id)
                     except arista_exc.AristaRpcError:
-                        msg = _('Unable to reach EOS, will update it\'s state '
-                                'during synchronization')
-                        LOG.info(msg)
+                        LOG.info(EOS_UNREACHABLE_MSG)
 
     def delete_network_precommit(self, context):
         """Delete the network infromation from the DB."""
-
         network = context.current()
         network_id = network['id']
         tenant_id = network['tenant_id']
@@ -504,7 +509,6 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def delete_network_postcommit(self, context):
         """Send network delete request to Arista HW."""
-
         network = context.current()
         network_id = network['id']
         tenant_id = network['tenant_id']
@@ -515,9 +519,7 @@ class AristaDriver(driver_api.MechanismDriver):
             try:
                 self.rpc.delete_network(tenant_id, network_id)
             except arista_exc.AristaRpcError:
-                msg = _('Unable to reach EOS, will update it\'s state '
-                        'during synchronization')
-                LOG.info(msg)
+                LOG.info(EOS_UNREACHABLE_MSG)
 
     def create_port_precommit(self, context):
         """Remember the infromation about a VM and its ports
@@ -584,9 +586,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                                         tenant_id,
                                                         port_name)
             except arista_exc.AristaRpcError:
-                msg = _('Unable to reach EOS, will update it\'s state '
-                        'during synchronization')
-                LOG.info(msg)
+                LOG.info(EOS_UNREACHABLE_MSG)
 
     def update_port_precommit(self, context):
         # TODO(sukhdev) revisit once the port binding support is implemented
@@ -598,7 +598,6 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def delete_port_precommit(self, context):
         """Delete information about a VM and host from the DB."""
-
         port = context.current()
 
         # TODO(sukhdev) revisit this once port biniding support is implemented
@@ -638,10 +637,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                                   network_id,
                                                   tenant_id)
         except arista_exc.AristaRpcError:
-            msg = _('Unable to reach EOS, will update it\'s state '
-                    'during synchronization')
-            LOG.info(msg)
-        return
+            LOG.info(EOS_UNREACHABLE_MSG)
 
     def _host_name(self, hostname):
         fqdns_used = cfg.CONF.ARISTA_DRIVER['use_fqdn']

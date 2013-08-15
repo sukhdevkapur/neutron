@@ -10,6 +10,7 @@ eventlet>=0.9.17
 greenlet>=0.3.2
 httplib2
 iso8601>=0.1.4
+jsonrpclib
 kombu>=1.0.4
 netaddr
 python-neutronclient>=2.2.3,<3.0.0
@@ -26,6 +27,3 @@ stevedore>=0.9
 python-novaclient
 # End Cisco dependencies
 
-# Arista mechanism driver dependencies
-jsonrpclib
-# end Arista mechanism driver dependencies

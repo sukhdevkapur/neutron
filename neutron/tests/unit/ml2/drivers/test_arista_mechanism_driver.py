@@ -24,7 +24,7 @@ from oslo.config import cfg
 
 
 def clear_config():
-    cfg.CONF.clear()
+    cfg.CONF.reset()
 
 
 def setup_arista_wrapper_config(value=None):
@@ -52,7 +52,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
     def tearDown(self):
         super(AristaProvisionedVlansStorageTestCase, self).tearDown()
-        self.drv.tear_down()
+        clear_config()
 
     def test_tenant_is_remembered(self):
         tenant_id = 'test'
@@ -195,12 +195,15 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
             self.drv.forget_vm(vm, host_id, port_id,
                                network_id, tenant_id)
 
-        num_vms = len(self.drv.get_vm_list(tenant_id))
+        num_vms = len(self.drv.get_vms(tenant_id))
         expected = len(vm_to_remember) - len(vm_to_forget)
 
         self.assertEqual(expected, num_vms,
                          'There should be %(expected)d records, '
                          'got %(num_vms)d records' % locals())
+        # clean up afterwards
+        self.drv.forget_vm('vm3', host_id, port_id,
+                           network_id, tenant_id)
 
     def test_get_network_list_returns_eos_compatible_data(self):
         tenant = 'test-1'
@@ -219,7 +222,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         self.drv.remember_network(tenant, network_id, vlan_id)
         self.drv.remember_network(tenant, network2_id, vlan2_id)
 
-        net_list = self.drv.get_network_list(tenant)
+        net_list = self.drv.get_networks(tenant)
 
         self.assertTrue(net_list == expected_eos_net_list,
                         ('%(net_list)s != %(expected_eos_net_list)s' %
@@ -322,12 +325,12 @@ class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
 
     def test_get_network_info_returns_none_when_no_such_net(self):
         expected = []
-        self.drv.get_tenants_list = mock.MagicMock()
-        self.drv.get_tenants_list.return_value = []
+        self.drv.get_tenants = mock.MagicMock()
+        self.drv.get_tenants.return_value = []
 
-        net_info = self.drv.get_tenants_list()
+        net_info = self.drv.get_tenants()
 
-        self.drv.get_tenants_list.assert_called_once_with()
+        self.drv.get_tenants.assert_called_once_with()
         self.assertEqual(net_info, expected, ('Network info must be "None"'
                                               'for unknown network'))
 
@@ -337,10 +340,10 @@ class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
                           'some_info': 'net info'}
         known_nets = valid_net_info
 
-        self.drv.get_tenants_list = mock.MagicMock()
-        self.drv.get_tenants_list.return_value = known_nets
+        self.drv.get_tenants = mock.MagicMock()
+        self.drv.get_tenants.return_value = known_nets
 
-        net_info = self.drv.get_tenants_list()
+        net_info = self.drv.get_tenants()
         self.assertEqual(net_info, valid_net_info,
                          ('Must return network info for a valid net'))
 
@@ -381,7 +384,7 @@ class NegativeRPCWrapperTestCase(base.BaseTestCase):
         drv._server = mock.MagicMock()
         drv._server.runCmds.side_effect = Exception('server error')
 
-        self.assertRaises(arista_exc.AristaRpcError, drv.get_tenants_list)
+        self.assertRaises(arista_exc.AristaRpcError, drv.get_tenants)
 
 
 class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
@@ -401,8 +404,7 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
 
     def tearDown(self):
         super(RealNetStorageAristaDriverTestCase, self).tearDown()
-        self.net_storage.tear_down()
-        cfg.CONF.clear()
+        clear_config()
 
     def test_create_and_delete_network(self):
         tenant_id = 'ten-1'
@@ -489,7 +491,7 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
                                                   network_context)
             self.drv.create_port_precommit(port_context)
 
-        vm_list = self.storage_drv.get_vm_list(tenant_id)
+        vm_list = self.storage_drv.get_vms(tenant_id)
         provisioned_vms = len(vm_list)
         expected_vms = len(vms)
         self.assertEqual(expected_vms, provisioned_vms,
@@ -504,12 +506,12 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
                                                   network_context)
             self.drv.delete_port_precommit(port_context)
 
-        vm_list = self.storage_drv.get_vm_list(tenant_id)
+        vm_list = self.storage_drv.get_vms(tenant_id)
         provisioned_vms = len(vm_list)
         expected_vms = 0
         self.assertEqual(expected_vms, provisioned_vms,
                          'There should be %(expected_vms)d '
-                         'hosts, not %(provisioned_vms)d' % locals())
+                         'VMs, not %(provisioned_vms)d' % locals())
 
     def _get_network_context(self, tenant_id, net_id, seg_id):
         network = {'id': net_id,
