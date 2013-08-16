@@ -133,8 +133,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         num_nets_provisioned = self.drv.num_nets_provisioned(tenant_id)
 
         self.assertEqual(expected_num_nets, num_nets_provisioned,
-                         'There should be %(expected_num_nets)d '
-                         'nets, not %(num_nets_provisioned)d' % locals())
+                         'There should be %d nets, not %d' %
+                         (expected_num_nets, num_nets_provisioned))
 
     def test_removes_all_networks(self):
         tenant_id = 'test'
@@ -148,8 +148,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         expected = 0
 
         self.assertEqual(expected, num_nets_provisioned,
-                         'There should be %(expected)d '
-                         'nets, not %(num_nets_provisioned)d' % locals())
+                         'There should be %d nets, not %d' %
+                         (expected, num_nets_provisioned))
 
     def test_remembers_multiple_tenants(self):
         expected_num_tenants = 100
@@ -160,8 +160,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         num_tenants_provisioned = self.drv.num_provisioned_tenants()
 
         self.assertEqual(expected_num_tenants, num_tenants_provisioned,
-                         'There should be %(expected_num_tenants)d '
-                         'tenants, not %(num_tenants_provisioned)d' % locals())
+                         'There should be %d tenants, not %d' %
+                         (expected_num_tenants, num_tenants_provisioned))
 
     def test_removes_multiple_tenants(self):
         num_tenants = 100
@@ -176,8 +176,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         expected = 0
 
         self.assertEqual(expected, num_tenants_provisioned,
-                         'There should be %(expected)d '
-                         'tenants, not %(num_tenants_provisioned)d' % locals())
+                         'There should be %d tenants, not %d' %
+                         (expected, num_tenants_provisioned))
 
     def test_num_vm_is_valid(self):
         tenant_id = 'test'
@@ -199,8 +199,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         expected = len(vm_to_remember) - len(vm_to_forget)
 
         self.assertEqual(expected, num_vms,
-                         'There should be %(expected)d records, '
-                         'got %(num_vms)d records' % locals())
+                         'There should be %d records, '
+                         'got %d records' % (expected, num_vms))
         # clean up afterwards
         self.drv.forget_vm('vm3', host_id, port_id,
                            network_id, tenant_id)
@@ -224,9 +224,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
         net_list = self.drv.get_networks(tenant)
 
-        self.assertTrue(net_list == expected_eos_net_list,
-                        ('%(net_list)s != %(expected_eos_net_list)s' %
-                         locals()))
+        self.assertTrue(net_list == expected_eos_net_list, ('%s != %s' %
+                        (net_list, expected_eos_net_list)))
 
 
 class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
@@ -425,8 +424,8 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         num_nets_provisioned = self.storage_drv.num_nets_provisioned(tenant_id)
 
         self.assertEqual(expected_num_nets, num_nets_provisioned,
-                         'There should be %(expected_num_nets)d '
-                         'nets, not %(num_nets_provisioned)d' % locals())
+                         'There should be %d nets, not %d' %
+                         (expected_num_nets, num_nets_provisioned))
 
         #Now test the delete network
         self.drv.delete_network_precommit(network_context)
@@ -439,14 +438,13 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         expected_num_nets = 0
         num_nets_provisioned = self.storage_drv.num_nets_provisioned(tenant_id)
         self.assertEqual(expected_num_nets, num_nets_provisioned,
-                         'There should be %(expected_num_nets)d '
-                         'nets, not %(num_nets_provisioned)d' % locals())
+                         'There should be %d nets, not %d' %
+                         (expected_num_nets, num_nets_provisioned))
 
     def test_create_and_delete_multiple_networks(self):
         tenant_id = 'ten-1'
         expected_num_nets = 100
         segmentation_id = 1001
-        host_id = 'ubuntu1'
         nets = ['id%s' % n for n in range(expected_num_nets)]
         for net_id in nets:
             network_context = self._get_network_context(tenant_id,
@@ -457,8 +455,8 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         num_nets_provisioned = self.storage_drv.num_nets_provisioned(tenant_id)
 
         self.assertEqual(expected_num_nets, num_nets_provisioned,
-                         'There should be %(expected_num_nets)d '
-                         'nets, not %(num_nets_provisioned)d' % locals())
+                         'There should be %d nets, not %d' %
+                         (expected_num_nets, num_nets_provisioned))
 
         #now test the delete networks
         for net_id in nets:
@@ -470,8 +468,8 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         num_nets_provisioned = self.storage_drv.num_nets_provisioned(tenant_id)
         expected_num_nets = 0
         self.assertEqual(expected_num_nets, num_nets_provisioned,
-                         'There should be %(expected_num_nets)d '
-                         'nets, not %(num_nets_provisioned)d' % locals())
+                         'There should be %d nets, not %d' %
+                         (expected_num_nets, num_nets_provisioned))
 
     def test_create_and_delete_ports(self):
         tenant_id = 'ten-1'
@@ -495,8 +493,8 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         provisioned_vms = len(vm_list)
         expected_vms = len(vms)
         self.assertEqual(expected_vms, provisioned_vms,
-                         'There should be %(expected_vms)d '
-                         'hosts, not %(provisioned_vms)d' % locals())
+                         'There should be %d '
+                         'hosts, not %d' % (expected_vms, provisioned_vms))
 
         # Now test the delete ports
         for vm_id in vms:
@@ -510,8 +508,8 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         provisioned_vms = len(vm_list)
         expected_vms = 0
         self.assertEqual(expected_vms, provisioned_vms,
-                         'There should be %(expected_vms)d '
-                         'VMs, not %(provisioned_vms)d' % locals())
+                         'There should be %d '
+                         'VMs, not %d' % (expected_vms, provisioned_vms))
 
     def _get_network_context(self, tenant_id, net_id, seg_id):
         network = {'id': net_id,

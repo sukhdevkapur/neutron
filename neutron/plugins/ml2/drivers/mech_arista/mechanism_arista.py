@@ -19,6 +19,7 @@ import jsonrpclib
 from oslo.config import cfg
 
 from neutron.openstack.common import log as logging
+from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import driver_api
 from neutron.plugins.ml2.drivers.mech_arista import config  # noqa
 from neutron.plugins.ml2.drivers.mech_arista import db
@@ -26,8 +27,7 @@ from neutron.plugins.ml2.drivers.mech_arista import exceptions as arista_exc
 
 LOG = logging.getLogger(__name__)
 
-EOS_UNREACHABLE_MSG = ('Unable to reach EOS, will update it\'s state '
-                       'during synchronization')
+EOS_UNREACHABLE_MSG = ('Unable to reach EOS')
 
 
 class AristaRPCWrapper(object):
@@ -237,9 +237,9 @@ class AristaRPCWrapper(object):
             ret = ret[len(command_start):-len(command_end)]
         except Exception as error:
             host = cfg.CONF.ARISTA_DRIVER.eapi_host
-            msg = _('Error %(error)s while trying to execute commands '
-                    '%(full_command)s on EOS %(host)s') % locals()
-            LOG.error(msg)
+            msg = ('Error %s while trying to execute commands %s on EOS %s' %
+                   (error, full_command, host))
+            LOG.error(_("%s"), msg)
             raise arista_exc.AristaRpcError(msg=msg)
 
         return ret
@@ -251,8 +251,8 @@ class AristaRPCWrapper(object):
         pwd = cfg.CONF.ARISTA_DRIVER.eapi_password
         host = cfg.CONF.ARISTA_DRIVER.eapi_host
 
-        eapi_server_url = ('https://%(user)s:%(pwd)s@%(host)s/command-api' %
-                           locals())
+        eapi_server_url = ('https://%s:%s@%s/command-api' %
+                           (user, pwd, host))
         return eapi_server_url
 
     def _validate_config(self):
@@ -460,6 +460,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                             vlan_id)
                 except arista_exc.AristaRpcError:
                     LOG.info(EOS_UNREACHABLE_MSG)
+                    raise ml2_exc.MechanismDriverError()
 
     def update_network_precommit(self, context):
         """At the moment we only support network name change
@@ -497,6 +498,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                                 vlan_id)
                     except arista_exc.AristaRpcError:
                         LOG.info(EOS_UNREACHABLE_MSG)
+                        raise ml2_exc.MechanismDriverError()
 
     def delete_network_precommit(self, context):
         """Delete the network infromation from the DB."""
@@ -520,6 +522,7 @@ class AristaDriver(driver_api.MechanismDriver):
                 self.rpc.delete_network(tenant_id, network_id)
             except arista_exc.AristaRpcError:
                 LOG.info(EOS_UNREACHABLE_MSG)
+                raise ml2_exc.MechanismDriverError()
 
     def create_port_precommit(self, context):
         """Remember the infromation about a VM and its ports
@@ -587,6 +590,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                                         port_name)
             except arista_exc.AristaRpcError:
                 LOG.info(EOS_UNREACHABLE_MSG)
+                raise ml2_exc.MechanismDriverError()
 
     def update_port_precommit(self, context):
         # TODO(sukhdev) revisit once the port binding support is implemented
@@ -638,6 +642,7 @@ class AristaDriver(driver_api.MechanismDriver):
                                                   tenant_id)
         except arista_exc.AristaRpcError:
             LOG.info(EOS_UNREACHABLE_MSG)
+            raise ml2_exc.MechanismDriverError()
 
     def _host_name(self, hostname):
         fqdns_used = cfg.CONF.ARISTA_DRIVER['use_fqdn']
