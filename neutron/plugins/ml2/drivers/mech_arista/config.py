@@ -52,4 +52,4 @@ ARISTA_DRIVER_OPTS = [
                       'controllers are managining same Arista HW clusters'))
 ]
 
-cfg.CONF.register_opts(ARISTA_DRIVER_OPTS, "ARISTA_DRIVER")
+cfg.CONF.register_opts(ARISTA_DRIVER_OPTS, "ml2_arista")

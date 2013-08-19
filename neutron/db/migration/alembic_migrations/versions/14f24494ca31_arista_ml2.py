@@ -35,7 +35,6 @@ migration_for_plugins = [
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import mysql
 
 from neutron.db import migration
 
@@ -46,34 +45,28 @@ def upgrade(active_plugins=None, options=None):
 
     op.create_table(
         'arista_provisioned_nets',
-        sa.Column('tenant_id', mysql.VARCHAR(length=255), nullable=True),
-        sa.Column('id', mysql.VARCHAR(length=36), nullable=False),
-        sa.Column('network_id', mysql.VARCHAR(length=36), nullable=True),
-        sa.Column('segmentation_id', mysql.INTEGER(display_width=11),
+        sa.Column('tenant_id', sa.String(length=255), nullable=True),
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('network_id', sa.String(length=36), nullable=True),
+        sa.Column('segmentation_id', sa.Integer(),
                   autoincrement=False, nullable=True),
-        sa.PrimaryKeyConstraint('id'),
-        mysql_default_charset='utf8',
-        mysql_engine='InnoDB')
+        sa.PrimaryKeyConstraint('id'))
 
     op.create_table(
         'arista_provisioned_vms',
-        sa.Column('tenant_id', mysql.VARCHAR(length=255), nullable=True),
-        sa.Column('id', mysql.VARCHAR(length=36), nullable=False),
-        sa.Column('vm_id', mysql.VARCHAR(length=36), nullable=True),
-        sa.Column('host_id', mysql.VARCHAR(length=255), nullable=True),
-        sa.Column('port_id', mysql.VARCHAR(length=36), nullable=True),
-        sa.Column('network_id', mysql.VARCHAR(length=36), nullable=True),
-        sa.PrimaryKeyConstraint('id'),
-        mysql_default_charset='utf8',
-        mysql_engine='InnoDB')
+        sa.Column('tenant_id', sa.String(length=255), nullable=True),
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('vm_id', sa.String(length=36), nullable=True),
+        sa.Column('host_id', sa.String(length=255), nullable=True),
+        sa.Column('port_id', sa.String(length=36), nullable=True),
+        sa.Column('network_id', sa.String(length=36), nullable=True),
+        sa.PrimaryKeyConstraint('id'))
 
     op.create_table(
         'arista_provisioned_tenants',
-        sa.Column('tenant_id', mysql.VARCHAR(length=255), nullable=True),
-        sa.Column('id', mysql.VARCHAR(length=36), nullable=False),
-        sa.PrimaryKeyConstraint('id'),
-        mysql_default_charset='utf8',
-        mysql_engine='InnoDB')
+        sa.Column('tenant_id', sa.String(length=255), nullable=True),
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.PrimaryKeyConstraint('id'))
 
 
 def downgrade(active_plugins=None, options=None):

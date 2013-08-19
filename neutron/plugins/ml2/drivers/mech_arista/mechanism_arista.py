@@ -44,7 +44,7 @@ class AristaRPCWrapper(object):
     def __init__(self):
         self._server = jsonrpclib.Server(self._eapi_host_url())
         self.keystone_conf = cfg.CONF.keystone_authtoken
-        self.region = cfg.CONF.ARISTA_DRIVER.region_name
+        self.region = cfg.CONF.ml2_arista.region_name
 
     def _keystone_url(self):
         keystone_auth_url = ('%s://%s:%s/v2.0/' %
@@ -236,7 +236,7 @@ class AristaRPCWrapper(object):
             # 'management openstack' and 'exit' commands
             ret = ret[len(command_start):-len(command_end)]
         except Exception as error:
-            host = cfg.CONF.ARISTA_DRIVER.eapi_host
+            host = cfg.CONF.ml2_arista.eapi_host
             msg = ('Error %s while trying to execute commands %s on EOS %s' %
                    (error, full_command, host))
             LOG.error(_("%s"), msg)
@@ -247,9 +247,9 @@ class AristaRPCWrapper(object):
     def _eapi_host_url(self):
         self._validate_config()
 
-        user = cfg.CONF.ARISTA_DRIVER.eapi_username
-        pwd = cfg.CONF.ARISTA_DRIVER.eapi_password
-        host = cfg.CONF.ARISTA_DRIVER.eapi_host
+        user = cfg.CONF.ml2_arista.eapi_username
+        pwd = cfg.CONF.ml2_arista.eapi_password
+        host = cfg.CONF.ml2_arista.eapi_host
 
         eapi_server_url = ('https://%s:%s@%s/command-api' %
                            (user, pwd, host))
@@ -257,7 +257,7 @@ class AristaRPCWrapper(object):
 
     def _validate_config(self):
         for option in self.required_options:
-            if cfg.CONF.ARISTA_DRIVER.get(option) is None:
+            if cfg.CONF.ml2_arista.get(option) is None:
                 msg = _('Required option %s is not set') % option
                 LOG.error(msg)
                 raise arista_exc.AristaConfigError(msg=msg)
@@ -417,7 +417,7 @@ class AristaDriver(driver_api.MechanismDriver):
         self.net_storage = net_storage
         self.net_storage.initialize_db()
 
-        confg = cfg.CONF.ARISTA_DRIVER
+        confg = cfg.CONF.ml2_arista
         self.segmentation_type = db.VLAN_SEGMENTATION
         self.eos = SyncService(self.net_storage, self.rpc, self.ndb)
         self.sync_timeout = confg['sync_interval']
@@ -427,6 +427,7 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def initialize(self):
         self.rpc._register_with_eos()
+        self._cleanupDb()
 
     def create_network_precommit(self, context):
         """Remember the tenant, and network information."""
@@ -461,6 +462,10 @@ class AristaDriver(driver_api.MechanismDriver):
                 except arista_exc.AristaRpcError:
                     LOG.info(EOS_UNREACHABLE_MSG)
                     raise ml2_exc.MechanismDriverError()
+            else:
+                msg = _('Network %s is not created as it is not found in'
+                        'Arista DB') % network_id
+                LOG.info(msg)
 
     def update_network_precommit(self, context):
         """At the moment we only support network name change
@@ -499,6 +504,10 @@ class AristaDriver(driver_api.MechanismDriver):
                     except arista_exc.AristaRpcError:
                         LOG.info(EOS_UNREACHABLE_MSG)
                         raise ml2_exc.MechanismDriverError()
+                else:
+                    msg = _('Network %s is not updated as it is not found in'
+                            'Arista DB') % network_id
+                    LOG.info(msg)
 
     def delete_network_precommit(self, context):
         """Delete the network infromation from the DB."""
@@ -515,6 +524,7 @@ class AristaDriver(driver_api.MechanismDriver):
         network_id = network['id']
         tenant_id = network['tenant_id']
         with self.eos_sync_lock:
+
             # Succeed deleting network in case EOS is not accessible.
             # EOS state will be updated by sync thread once EOS gets
             # alive.
@@ -567,30 +577,34 @@ class AristaDriver(driver_api.MechanismDriver):
             port_name = port['name']
             network_id = port['network_id']
             tenant_id = port['tenant_id']
-            try:
-                with self.eos_sync_lock:
-                    s = self.net_storage
-                    hostname = self._host_name(host)
-                    segmentation_id = s.get_segmentation_id(tenant_id,
-                                                            network_id)
-                    vm_provisioned = s.is_vm_provisioned(device_id,
-                                                         host,
-                                                         port_id,
-                                                         network_id,
-                                                         tenant_id)
-                    net_provisioned = s.is_network_provisioned(tenant_id,
-                                                               network_id,
-                                                               segmentation_id)
-                    if vm_provisioned and net_provisioned:
+            with self.eos_sync_lock:
+                s = self.net_storage
+                hostname = self._host_name(host)
+                segmentation_id = s.get_segmentation_id(tenant_id,
+                                                        network_id)
+                vm_provisioned = s.is_vm_provisioned(device_id,
+                                                     host,
+                                                     port_id,
+                                                     network_id,
+                                                     tenant_id)
+                net_provisioned = s.is_network_provisioned(tenant_id,
+                                                           network_id,
+                                                           segmentation_id)
+                if vm_provisioned and net_provisioned:
+                    try:
                         self.rpc.plug_host_into_network(device_id,
                                                         hostname,
                                                         port_id,
                                                         network_id,
                                                         tenant_id,
                                                         port_name)
-            except arista_exc.AristaRpcError:
-                LOG.info(EOS_UNREACHABLE_MSG)
-                raise ml2_exc.MechanismDriverError()
+                    except arista_exc.AristaRpcError:
+                        LOG.info(EOS_UNREACHABLE_MSG)
+                        raise ml2_exc.MechanismDriverError()
+                else:
+                    msg = _('VM %s is not created as it is not found in'
+                            'Arista DB') % device_id
+                    LOG.info(msg)
 
     def update_port_precommit(self, context):
         # TODO(sukhdev) revisit once the port binding support is implemented
@@ -645,7 +659,7 @@ class AristaDriver(driver_api.MechanismDriver):
             raise ml2_exc.MechanismDriverError()
 
     def _host_name(self, hostname):
-        fqdns_used = cfg.CONF.ARISTA_DRIVER['use_fqdn']
+        fqdns_used = cfg.CONF.ml2_arista['use_fqdn']
         return hostname if fqdns_used else hostname.split('.')[0]
 
     def _synchronization_thread(self):
@@ -655,8 +669,15 @@ class AristaDriver(driver_api.MechanismDriver):
         t = threading.Timer(self.sync_timeout, self._synchronization_thread)
         t.start()
 
-    def _vlans_used(self):
-        return self._segm_type_used(db.VLAN_SEGMENTATION)
-
-    def _segm_type_used(self, segm_type):
-        return self.segmentation_type == segm_type
+    def _cleanupDb(self):
+        """Clean up any uncessary entries in our DB."""
+        db_tenants = self.net_storage.get_tenants()
+        for tenant in db_tenants:
+            neutron_nets = self.ndb.get_all_networks_for_tenant(tenant)
+            neutron_nets_id = []
+            for net in neutron_nets:
+                neutron_nets_id.append(net['id'])
+            db_nets = self.net_storage.get_networks(tenant)
+            for net_id in db_nets.keys():
+                if net_id not in neutron_nets_id:
+                    self.net_storage.forget_network(tenant, net_id)

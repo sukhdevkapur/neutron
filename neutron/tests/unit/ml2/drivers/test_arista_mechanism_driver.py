@@ -30,7 +30,7 @@ def clear_config():
 def setup_arista_wrapper_config(value=None):
     cfg.CONF.keystone_authtoken = fake_keystone_info_class()
     for opt in arista.AristaRPCWrapper.required_options:
-        cfg.CONF.set_override(opt, value, "ARISTA_DRIVER")
+        cfg.CONF.set_override(opt, value, "ml2_arista")
 
 
 def setup_valid_config():
