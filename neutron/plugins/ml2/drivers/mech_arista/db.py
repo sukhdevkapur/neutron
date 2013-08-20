@@ -20,11 +20,9 @@ import neutron.db.api as db
 from neutron.db import db_base_plugin_v2
 from neutron.db import model_base
 from neutron.db import models_v2
-from neutron.openstack.common import log as logging
 
 VLAN_SEGMENTATION = 'vlan'
 
-LOG = logging.getLogger(__name__)
 UUID_LEN = 36
 STR_LEN = 255
 
@@ -152,7 +150,6 @@ class ProvisionedNetsStorage(object):
 
     def num_provisioned_tenants(self):
         """Returns number of tenants stored in repository."""
-
         session = db.get_session()
         with session.begin():
             return (session.query(self.AristaProvisionedTenants).count())
