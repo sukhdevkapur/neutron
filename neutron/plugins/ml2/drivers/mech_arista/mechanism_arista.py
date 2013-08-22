@@ -549,8 +549,6 @@ class AristaDriver(driver_api.MechanismDriver):
 
         # device_id and device_owner are set on VM boot
         is_vm_boot = device_id and device_owner
-        import pdb
-        pdb.set_trace()
         if host and is_vm_boot:
             port_id = port['id']
             network_id = port['network_id']
