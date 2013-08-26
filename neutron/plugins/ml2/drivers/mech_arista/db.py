@@ -46,12 +46,6 @@ class ProvisionedNetsStorage(object):
             self.network_id = network_id
             self.segmentation_id = segmentation_id
 
-        def __repr__(self):
-            r = "<AristaProvisionedNets(%s,%s,%d,%s)>" % (self.tenant_id,
-                                                          self.network_id,
-                                                          self.segmentation_id)
-            return r
-
         def eos_network_representation(self, segmentation_type):
             return {u'networkId': self.network_id,
                     u'segmentationTypeId': self.segmentation_id,
@@ -78,13 +72,6 @@ class ProvisionedNetsStorage(object):
             self.network_id = network_id
             self.tenant_id = tenant_id
 
-        def __repr__(self):
-            return "<AristaProvisionedVms(%s,%s,%s,%s,%s)>" % (self.vm_id,
-                                                               self.host_id,
-                                                               self.port_id,
-                                                               self.network_id,
-                                                               self.tenant_id)
-
         def eos_vm_representation(self):
             return {u'vmId': self.vm_id,
                     u'host': self.host_id,
@@ -107,9 +94,6 @@ class ProvisionedNetsStorage(object):
 
         def __init__(self, tenant_id):
             self.tenant_id = tenant_id
-
-        def __repr__(self):
-            return "<AristaProvisionedTenants(%s)>" % (self.tenant_id)
 
         def eos_tenant_representation(self):
             return {u'tenantId': self.tenant_id}

@@ -23,10 +23,6 @@ from neutron.tests import base
 from oslo.config import cfg
 
 
-def clear_config():
-    cfg.CONF.reset()
-
-
 def setup_arista_wrapper_config(value=None):
     cfg.CONF.keystone_authtoken = fake_keystone_info_class()
     for opt in arista.AristaRPCWrapper.required_options:
@@ -49,10 +45,6 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         super(AristaProvisionedVlansStorageTestCase, self).setUp()
         self.drv = db.ProvisionedNetsStorage()
         self.drv.initialize_db()
-
-    def tearDown(self):
-        super(AristaProvisionedVlansStorageTestCase, self).tearDown()
-        clear_config()
 
     def test_tenant_is_remembered(self):
         tenant_id = 'test'
@@ -241,10 +233,6 @@ class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
         self.region = 'RegionOne'
         self.drv._server = mock.MagicMock()
 
-    def tearDown(self):
-        super(PositiveRPCWrapperValidConfigTestCase, self).tearDown()
-        clear_config()
-
     def test_no_exception_on_correct_configuration(self):
         self.assertNotEqual(self.drv, None)
 
@@ -354,10 +342,6 @@ class AristaRPCWrapperInvalidConfigTestCase(base.BaseTestCase):
         super(AristaRPCWrapperInvalidConfigTestCase, self).setUp()
         self.setup_invalid_config()  # Invalid config, required options not set
 
-    def tearDown(self):
-        super(AristaRPCWrapperInvalidConfigTestCase, self).tearDown()
-        clear_config()
-
     def setup_invalid_config(self):
         setup_arista_wrapper_config(None)
 
@@ -372,10 +356,6 @@ class NegativeRPCWrapperTestCase(base.BaseTestCase):
     def setUp(self):
         super(NegativeRPCWrapperTestCase, self).setUp()
         setup_valid_config()
-
-    def tearDown(self):
-        super(NegativeRPCWrapperTestCase, self).tearDown()
-        clear_config()
 
     def test_exception_is_raised_on_json_server_error(self):
         drv = arista.AristaRPCWrapper()
@@ -400,10 +380,6 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         self.net_storage.initialize_db()
         self.drv = arista.AristaDriver(self.fake_rpc, self.net_storage)
         self.storage_drv = db.ProvisionedNetsStorage()
-
-    def tearDown(self):
-        super(RealNetStorageAristaDriverTestCase, self).tearDown()
-        clear_config()
 
     def test_create_and_delete_network(self):
         tenant_id = 'ten-1'
