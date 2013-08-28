@@ -25,11 +25,13 @@ from neutron.common import exceptions as ntn_exc
 import neutron.common.test_lib as test_lib
 from neutron import context
 from neutron.extensions import l3
+from neutron.extensions import multiprovidernet as mpnet
 from neutron.extensions import portbindings
 from neutron.extensions import providernet as pnet
 from neutron.extensions import securitygroup as secgrp
 from neutron import manager
 from neutron.openstack.common import uuidutils
+from neutron.plugins.nicira.common import exceptions as nvp_exc
 from neutron.plugins.nicira.dbexts import nicira_db
 from neutron.plugins.nicira.dbexts import nicira_qos_db as qos_db
 from neutron.plugins.nicira.extensions import nvp_networkgw
@@ -192,6 +194,22 @@ class TestNiciraPortsV2(NiciraPluginV2TestCase,
                                   webob.exc.HTTPInternalServerError.code)
                 self._verify_no_orphan_left(net_id)
 
+    def test_create_port_maintenance_returns_503(self):
+        with self.network() as net:
+            with mock.patch.object(nvplib, 'do_request',
+                                   side_effect=nvp_exc.MaintenanceInProgress):
+                data = {'port': {'network_id': net['network']['id'],
+                                 'admin_state_up': False,
+                                 'fixed_ips': [],
+                                 'tenant_id': self._tenant_id}}
+                plugin = manager.NeutronManager.get_plugin()
+                with mock.patch.object(plugin, 'get_network',
+                                       return_value=net['network']):
+                    port_req = self.new_create_request('ports', data, self.fmt)
+                    res = port_req.get_response(self.api)
+                    self.assertEqual(webob.exc.HTTPServiceUnavailable.code,
+                                     res.status_int)
+
 
 class TestNiciraNetworksV2(test_plugin.TestNetworksV2,
                            NiciraPluginV2TestCase):
@@ -275,6 +293,17 @@ class TestNiciraNetworksV2(test_plugin.TestNetworksV2,
         with self.network(name=name) as net:
             # Assert neutron name is not truncated
             self.assertEqual(net['network']['name'], name)
+
+    def test_create_network_maintenance_returns_503(self):
+        data = {'network': {'name': 'foo',
+                            'admin_state_up': True,
+                            'tenant_id': self._tenant_id}}
+        with mock.patch.object(nvplib, 'do_request',
+                               side_effect=nvp_exc.MaintenanceInProgress):
+            net_req = self.new_create_request('networks', data, self.fmt)
+            res = net_req.get_response(self.api)
+            self.assertEqual(webob.exc.HTTPServiceUnavailable.code,
+                             res.status_int)
 
 
 class NiciraPortSecurityTestCase(psec.PortSecurityDBTestCase):
@@ -705,6 +734,23 @@ class TestNiciraL3NatTestCase(test_l3_plugin.L3NatDBTestCase,
                 body = self._show('floatingips', fip['floatingip']['id'])
                 self.assertIsNone(body['floatingip']['port_id'])
                 self.assertIsNone(body['floatingip']['fixed_ip_address'])
+
+    def test_create_router_maintenance_returns_503(self):
+        with self._create_l3_ext_network() as net:
+            with self.subnet(network=net) as s:
+                with mock.patch.object(
+                    nvplib,
+                    'do_request',
+                    side_effect=nvp_exc.MaintenanceInProgress):
+                    data = {'router': {'tenant_id': 'whatever'}}
+                    data['router']['name'] = 'router1'
+                    data['router']['external_gateway_info'] = {
+                        'network_id': s['subnet']['network_id']}
+                    router_req = self.new_create_request(
+                        'routers', data, self.fmt)
+                    res = router_req.get_response(self.ext_api)
+                    self.assertEqual(webob.exc.HTTPServiceUnavailable.code,
+                                     res.status_int)
 
 
 class NvpQoSTestExtensionManager(object):
@@ -1187,3 +1233,105 @@ class TestNiciraNetworkGateway(test_l2_gw.NetworkGatewayDbTestCase,
     def test_delete_network_gateway(self):
         # The default gateway must still be there
         self._test_delete_network_gateway(1)
+
+
+class TestNiciraMultiProviderNetworks(NiciraPluginV2TestCase):
+
+    def setUp(self, plugin=None):
+        cfg.CONF.set_override('api_extensions_path', NVPEXT_PATH)
+        super(TestNiciraMultiProviderNetworks, self).setUp()
+
+    def test_create_network_provider(self):
+        data = {'network': {'name': 'net1',
+                            pnet.NETWORK_TYPE: 'vlan',
+                            pnet.PHYSICAL_NETWORK: 'physnet1',
+                            pnet.SEGMENTATION_ID: 1,
+                            'tenant_id': 'tenant_one'}}
+        network_req = self.new_create_request('networks', data)
+        network = self.deserialize(self.fmt,
+                                   network_req.get_response(self.api))
+        self.assertEqual(network['network'][pnet.NETWORK_TYPE], 'vlan')
+        self.assertEqual(network['network'][pnet.PHYSICAL_NETWORK], 'physnet1')
+        self.assertEqual(network['network'][pnet.SEGMENTATION_ID], 1)
+        self.assertNotIn(mpnet.SEGMENTS, network['network'])
+
+    def test_create_network_single_multiple_provider(self):
+        data = {'network': {'name': 'net1',
+                            mpnet.SEGMENTS:
+                            [{pnet.NETWORK_TYPE: 'vlan',
+                              pnet.PHYSICAL_NETWORK: 'physnet1',
+                              pnet.SEGMENTATION_ID: 1}],
+                            'tenant_id': 'tenant_one'}}
+        net_req = self.new_create_request('networks', data)
+        network = self.deserialize(self.fmt, net_req.get_response(self.api))
+        for provider_field in [pnet.NETWORK_TYPE, pnet.PHYSICAL_NETWORK,
+                               pnet.SEGMENTATION_ID]:
+            self.assertTrue(provider_field not in network['network'])
+        tz = network['network'][mpnet.SEGMENTS][0]
+        self.assertEqual(tz[pnet.NETWORK_TYPE], 'vlan')
+        self.assertEqual(tz[pnet.PHYSICAL_NETWORK], 'physnet1')
+        self.assertEqual(tz[pnet.SEGMENTATION_ID], 1)
+
+        # Tests get_network()
+        net_req = self.new_show_request('networks', network['network']['id'])
+        network = self.deserialize(self.fmt, net_req.get_response(self.api))
+        tz = network['network'][mpnet.SEGMENTS][0]
+        self.assertEqual(tz[pnet.NETWORK_TYPE], 'vlan')
+        self.assertEqual(tz[pnet.PHYSICAL_NETWORK], 'physnet1')
+        self.assertEqual(tz[pnet.SEGMENTATION_ID], 1)
+
+    def test_create_network_multprovider(self):
+        data = {'network': {'name': 'net1',
+                            mpnet.SEGMENTS:
+                            [{pnet.NETWORK_TYPE: 'vlan',
+                              pnet.PHYSICAL_NETWORK: 'physnet1',
+                              pnet.SEGMENTATION_ID: 1},
+                            {pnet.NETWORK_TYPE: 'stt',
+                             pnet.PHYSICAL_NETWORK: 'physnet1'}],
+                            'tenant_id': 'tenant_one'}}
+        network_req = self.new_create_request('networks', data)
+        network = self.deserialize(self.fmt,
+                                   network_req.get_response(self.api))
+        tz = network['network'][mpnet.SEGMENTS]
+        for tz in data['network'][mpnet.SEGMENTS]:
+            for field in [pnet.NETWORK_TYPE, pnet.PHYSICAL_NETWORK,
+                          pnet.SEGMENTATION_ID]:
+                self.assertEqual(tz.get(field), tz.get(field))
+
+        # Tests get_network()
+        net_req = self.new_show_request('networks', network['network']['id'])
+        network = self.deserialize(self.fmt, net_req.get_response(self.api))
+        tz = network['network'][mpnet.SEGMENTS]
+        for tz in data['network'][mpnet.SEGMENTS]:
+            for field in [pnet.NETWORK_TYPE, pnet.PHYSICAL_NETWORK,
+                          pnet.SEGMENTATION_ID]:
+                self.assertEqual(tz.get(field), tz.get(field))
+
+    def test_create_network_with_provider_and_multiprovider_fail(self):
+        data = {'network': {'name': 'net1',
+                            mpnet.SEGMENTS:
+                            [{pnet.NETWORK_TYPE: 'vlan',
+                              pnet.PHYSICAL_NETWORK: 'physnet1',
+                              pnet.SEGMENTATION_ID: 1}],
+                            pnet.NETWORK_TYPE: 'vlan',
+                            pnet.PHYSICAL_NETWORK: 'physnet1',
+                            pnet.SEGMENTATION_ID: 1,
+                            'tenant_id': 'tenant_one'}}
+
+        network_req = self.new_create_request('networks', data)
+        res = network_req.get_response(self.api)
+        self.assertEqual(res.status_int, 400)
+
+    def test_create_network_duplicate_segments(self):
+        data = {'network': {'name': 'net1',
+                            mpnet.SEGMENTS:
+                            [{pnet.NETWORK_TYPE: 'vlan',
+                              pnet.PHYSICAL_NETWORK: 'physnet1',
+                              pnet.SEGMENTATION_ID: 1},
+                            {pnet.NETWORK_TYPE: 'vlan',
+                             pnet.PHYSICAL_NETWORK: 'physnet1',
+                             pnet.SEGMENTATION_ID: 1}],
+                            'tenant_id': 'tenant_one'}}
+        network_req = self.new_create_request('networks', data)
+        res = network_req.get_response(self.api)
+        self.assertEqual(res.status_int, 400)

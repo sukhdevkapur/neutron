@@ -32,6 +32,7 @@ down_revision = 'f489cf14a79c'
 migration_for_plugins = [
     'neutron.plugins.openvswitch.ovs_neutron_plugin.OVSNeutronPluginV2',
     'neutron.plugins.linuxbridge.lb_neutron_plugin.LinuxBridgePluginV2',
+    'neutron.plugins.bigswitch.plugin.NeutronRestProxyV2',
     'neutron.plugins.nicira.NeutronPlugin.NvpPluginV2',
 ]
 

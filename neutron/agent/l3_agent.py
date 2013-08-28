@@ -95,6 +95,7 @@ class RouterInfo(object):
         self._snat_enabled = None
         self._snat_action = None
         self.internal_ports = []
+        self.floating_ips = []
         self.root_helper = root_helper
         self.use_namespaces = use_namespaces
         # Invoke the setter for establishing initial SNAT action
@@ -115,15 +116,15 @@ class RouterInfo(object):
         self._router = value
         if not self._router:
             return
+        # enable_snat by default if it wasn't specified by plugin
+        self._snat_enabled = self._router.get('enable_snat', True)
         # Set a SNAT action for the router
         if self._router.get('gw_port'):
-            self._snat_action = (
-                'add_rules' if self._router.get('enable_snat')
-                else 'remove_rules')
+            self._snat_action = ('add_rules' if self._snat_enabled
+                                 else 'remove_rules')
         elif self.ex_gw_port:
             # Gateway port was removed, remove rules
             self._snat_action = 'remove_rules'
-        self._snat_enabled = self._router.get('enable_snat')
 
     def ns_name(self):
         if self.use_namespaces:
@@ -180,6 +181,10 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
                           "by the agents.")),
         cfg.BoolOpt('enable_metadata_proxy', default=True,
                     help=_("Allow running metadata proxy.")),
+        cfg.StrOpt('metadata_proxy_socket',
+                   default='$state_path/metadata_proxy',
+                   help=_('Location of Metadata Proxy UNIX domain '
+                          'socket')),
     ]
 
     def __init__(self, host, conf=None):
@@ -303,8 +308,10 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
 
     def _spawn_metadata_proxy(self, router_info):
         def callback(pid_file):
+            metadata_proxy_socket = cfg.CONF.metadata_proxy_socket
             proxy_cmd = ['neutron-ns-metadata-proxy',
                          '--pid_file=%s' % pid_file,
+                         '--metadata_proxy_socket=%s' % metadata_proxy_socket,
                          '--router_id=%s' % router_info.router_id,
                          '--state_path=%s' % self.conf.state_path,
                          '--metadata_port=%s' % self.conf.metadata_port]
@@ -409,47 +416,45 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
         ri.iptables_manager.apply()
 
     def process_router_floating_ips(self, ri, ex_gw_port):
-        """Configure the router's floating IPs
-        Configures floating ips in iptables and on the router's gateway device.
+        floating_ips = ri.router.get(l3_constants.FLOATINGIP_KEY, [])
+        existing_floating_ip_ids = set([fip['id'] for fip in ri.floating_ips])
+        cur_floating_ip_ids = set([fip['id'] for fip in floating_ips])
 
-        Cleans up floating ips that should not longer be configured.
-        """
-        cidr_suffix = '/32'
-        interface_name = self.get_external_device_name(ex_gw_port['id'])
-        device = ip_lib.IPDevice(interface_name, self.root_helper,
-                                 namespace=ri.ns_name())
+        id_to_fip_map = {}
 
-        # Clear out all iptables rules for these chains.
-        for chain, rule in self.floating_forward_rules(None, None):
-            ri.iptables_manager.ipv4['nat'].empty_chain(chain)
+        for fip in floating_ips:
+            if fip['port_id']:
+                if fip['id'] not in existing_floating_ip_ids:
+                    ri.floating_ips.append(fip)
+                    self.floating_ip_added(ri, ex_gw_port,
+                                           fip['floating_ip_address'],
+                                           fip['fixed_ip_address'])
 
-        existing_cidrs = set([addr['cidr'] for addr in device.addr.list()])
-        new_cidrs = set()
+                # store to see if floatingip was remapped
+                id_to_fip_map[fip['id']] = fip
 
-        # Loop once to ensure that floating ips are configured.
-        for fip in ri.router.get(l3_constants.FLOATINGIP_KEY, []):
-            fip_ip = fip['floating_ip_address']
-            ip_cidr = str(fip_ip) + cidr_suffix
-
-            new_cidrs.add(ip_cidr)
-
-            if ip_cidr not in existing_cidrs:
-                net = netaddr.IPNetwork(ip_cidr)
-                device.addr.add(net.version, ip_cidr, str(net.broadcast))
-                self._send_gratuitous_arp_packet(ri, interface_name, fip_ip)
-
-            # Rebuild iptables rules for the floating ip.
-            fixed = fip['fixed_ip_address']
-            for chain, rule in self.floating_forward_rules(fip_ip, fixed):
-                ri.iptables_manager.ipv4['nat'].add_rule(chain, rule)
-
-        ri.iptables_manager.apply()
-
-        # Clean up addresses that no longer belong on the gateway interface.
-        for ip_cidr in existing_cidrs - new_cidrs:
-            if ip_cidr.endswith(cidr_suffix):
-                net = netaddr.IPNetwork(ip_cidr)
-                device.addr.delete(net.version, ip_cidr)
+        floating_ip_ids_to_remove = (existing_floating_ip_ids -
+                                     cur_floating_ip_ids)
+        for fip in ri.floating_ips:
+            if fip['id'] in floating_ip_ids_to_remove:
+                ri.floating_ips.remove(fip)
+                self.floating_ip_removed(ri, ri.ex_gw_port,
+                                         fip['floating_ip_address'],
+                                         fip['fixed_ip_address'])
+            else:
+                # handle remapping of a floating IP
+                new_fip = id_to_fip_map[fip['id']]
+                new_fixed_ip = new_fip['fixed_ip_address']
+                existing_fixed_ip = fip['fixed_ip_address']
+                if (new_fixed_ip and existing_fixed_ip and
+                        new_fixed_ip != existing_fixed_ip):
+                    floating_ip = fip['floating_ip_address']
+                    self.floating_ip_removed(ri, ri.ex_gw_port,
+                                             floating_ip, existing_fixed_ip)
+                    self.floating_ip_added(ri, ri.ex_gw_port,
+                                           floating_ip, new_fixed_ip)
+                    ri.floating_ips.remove(fip)
+                    ri.floating_ips.append(new_fip)
 
     def _get_ex_gw_port(self, ri):
         return ri.router.get('gw_port')
@@ -567,6 +572,34 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
         rules = [('snat', '-s %s -j SNAT --to-source %s' %
                  (internal_cidr, ex_gw_ip))]
         return rules
+
+    def floating_ip_added(self, ri, ex_gw_port, floating_ip, fixed_ip):
+        ip_cidr = str(floating_ip) + '/32'
+        interface_name = self.get_external_device_name(ex_gw_port['id'])
+        device = ip_lib.IPDevice(interface_name, self.root_helper,
+                                 namespace=ri.ns_name())
+
+        if ip_cidr not in [addr['cidr'] for addr in device.addr.list()]:
+            net = netaddr.IPNetwork(ip_cidr)
+            device.addr.add(net.version, ip_cidr, str(net.broadcast))
+            self._send_gratuitous_arp_packet(ri, interface_name, floating_ip)
+
+        for chain, rule in self.floating_forward_rules(floating_ip, fixed_ip):
+            ri.iptables_manager.ipv4['nat'].add_rule(chain, rule)
+        ri.iptables_manager.apply()
+
+    def floating_ip_removed(self, ri, ex_gw_port, floating_ip, fixed_ip):
+        ip_cidr = str(floating_ip) + '/32'
+        net = netaddr.IPNetwork(ip_cidr)
+        interface_name = self.get_external_device_name(ex_gw_port['id'])
+
+        device = ip_lib.IPDevice(interface_name, self.root_helper,
+                                 namespace=ri.ns_name())
+        device.addr.delete(net.version, ip_cidr)
+
+        for chain, rule in self.floating_forward_rules(floating_ip, fixed_ip):
+            ri.iptables_manager.ipv4['nat'].remove_rule(chain, rule)
+        ri.iptables_manager.apply()
 
     def floating_forward_rules(self, floating_ip, fixed_ip):
         return [('PREROUTING', '-d %s -j DNAT --to %s' %

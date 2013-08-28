@@ -37,10 +37,13 @@ class Plumlib(object):
     def __init__(self):
         LOG.info('Python PLUMgrid Library Started ')
 
-    def director_conn(self, director_plumgrid, director_port, timeout):
+    def director_conn(self, director_plumgrid, director_port, timeout,
+                      director_admin, director_password):
         self.plumlib = plumlib.Plumlib(director_plumgrid,
                                        director_port,
-                                       timeout)
+                                       timeout,
+                                       director_admin,
+                                       director_password)
 
     def create_network(self, tenant_id, net_db):
         self.plumlib.create_network(tenant_id, net_db)
@@ -83,3 +86,12 @@ class Plumlib(object):
 
     def remove_router_interface(self, tenant_id, net_id, router_id):
         self.plumlib.remove_router_interface(tenant_id, net_id, router_id)
+
+    def create_floatingip(self, net_db, floating_ip):
+        self.plumlib.create_floatingip(net_db, floating_ip)
+
+    def update_floatingip(self, net_db, floating_ip):
+        self.plumlib.update_floatingip(net_db, floating_ip, id)
+
+    def delete_floatingip(self, net_db, floating_ip_org, id):
+        self.plumlib.delete_floatingip(net_db, floating_ip_org, id)

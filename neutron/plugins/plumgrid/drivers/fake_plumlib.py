@@ -32,7 +32,8 @@ class Plumlib():
         LOG.info('Python PLUMgrid Fake Library Started ')
         pass
 
-    def director_conn(self, director_plumgrid, director_port, timeout):
+    def director_conn(self, director_plumgrid, director_port, timeout,
+                      director_admin, director_password):
         LOG.info('Fake Director: %s', director_plumgrid + ':' + director_port)
         pass
 
@@ -76,4 +77,13 @@ class Plumlib():
         pass
 
     def remove_router_interface(self, tenant_id, net_id, router_id):
+        pass
+
+    def create_floatingip(self, net_db, floating_ip):
+        pass
+
+    def update_floatingip(self, net_db, floating_ip, id):
+        pass
+
+    def delete_floatingip(self, net_db, floating_ip_org, id):
         pass

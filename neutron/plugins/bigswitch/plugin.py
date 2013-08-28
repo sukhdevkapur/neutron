@@ -295,10 +295,11 @@ class ServerPool(object):
                 return ret
             else:
                 LOG.error(_('ServerProxy: %(action)s failure for servers: '
-                            '%(server)r'),
+                            '%(server)r Response: %(response)s'),
                           {'action': action,
                            'server': (active_server.server,
-                                      active_server.port)})
+                                      active_server.port),
+                           'response': ret[3]})
                 active_server.failed = True
 
         # All servers failed, reset server list and try again next time
@@ -560,11 +561,12 @@ class NeutronRestProxyV2(db_base_plugin_v2.NeutronDbPluginV2,
 
         # Update DB
         port["port"]["admin_state_up"] = False
-        if (portbindings.HOST_ID in port['port']
-            and 'device_id' in port['port']):
-            porttracker_db.put_port_hostid(context, port['port']['device_id'],
-                                           port['port'][portbindings.HOST_ID])
         new_port = super(NeutronRestProxyV2, self).create_port(context, port)
+        if (portbindings.HOST_ID in port['port']
+            and 'id' in new_port):
+            porttracker_db.put_port_hostid(context, new_port['id'],
+                                           port['port'][portbindings.HOST_ID])
+        new_port = self._extend_port_dict_binding(context, new_port)
         net = super(NeutronRestProxyV2,
                     self).get_network(context, new_port["network_id"])
 
@@ -657,9 +659,10 @@ class NeutronRestProxyV2(db_base_plugin_v2.NeutronDbPluginV2,
         new_port = super(NeutronRestProxyV2, self).update_port(context,
                                                                port_id, port)
         if (portbindings.HOST_ID in port['port']
-            and 'device_id' in port['port']):
-            porttracker_db.put_port_hostid(context, port['port']['device_id'],
+            and 'id' in new_port):
+            porttracker_db.put_port_hostid(context, new_port['id'],
                                            port['port'][portbindings.HOST_ID])
+        new_port = self._extend_port_dict_binding(context, new_port)
         # update on networl ctrl
         try:
             resource = PORTS_PATH % (orig_port["tenant_id"],
@@ -690,7 +693,7 @@ class NeutronRestProxyV2(db_base_plugin_v2.NeutronDbPluginV2,
             raise
 
         # return new_port
-        return self._extend_port_dict_binding(context, new_port)
+        return new_port
 
     def delete_port(self, context, port_id, l3_port_check=True):
         """Delete a port.
@@ -1335,7 +1338,7 @@ class NeutronRestProxyV2(db_base_plugin_v2.NeutronDbPluginV2,
                         cfg_vif_type)
             cfg_vif_type = portbindings.VIF_TYPE_OVS
         hostid = porttracker_db.get_port_hostid(context,
-                                                port.get("device_id"))
+                                                port['id'])
         if hostid:
             override = self._check_hostvif_override(hostid)
             if override:

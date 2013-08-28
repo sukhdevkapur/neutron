@@ -312,9 +312,11 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
         subnet.
         """
         # Grab all allocation pools for the subnet
-        pool_qry = context.session.query(
-            models_v2.IPAllocationPool).with_lockmode('update')
-        allocation_pools = pool_qry.filter_by(subnet_id=subnet_id)
+        allocation_pools = (context.session.query(
+            models_v2.IPAllocationPool).filter_by(subnet_id=subnet_id).
+            options(orm.joinedload('available_ranges', innerjoin=True)).
+            with_lockmode('update'))
+
         # Find the allocation pool for the IP to recycle
         pool_id = None
         for allocation_pool in allocation_pools:
@@ -1046,7 +1048,7 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
         if attributes.is_attr_set(s.get('dns_nameservers')):
             if len(s['dns_nameservers']) > cfg.CONF.max_dns_nameservers:
                 raise q_exc.DNSNameServersExhausted(
-                    subnet_id=id,
+                    subnet_id=s.get('id', _('new subnet')),
                     quota=cfg.CONF.max_dns_nameservers)
             for dns in s['dns_nameservers']:
                 try:
@@ -1060,7 +1062,7 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
         if attributes.is_attr_set(s.get('host_routes')):
             if len(s['host_routes']) > cfg.CONF.max_subnet_host_routes:
                 raise q_exc.HostRoutesExhausted(
-                    subnet_id=id,
+                    subnet_id=s.get('id', _('new subnet')),
                     quota=cfg.CONF.max_subnet_host_routes)
             # check if the routes are all valid
             for rt in s['host_routes']:
@@ -1154,6 +1156,7 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
         # and 'allocation_pools' fields.
         s['ip_version'] = db_subnet.ip_version
         s['cidr'] = db_subnet.cidr
+        s['id'] = db_subnet.id
         self._validate_subnet(s)
 
         if 'gateway_ip' in s and s['gateway_ip'] is not None:

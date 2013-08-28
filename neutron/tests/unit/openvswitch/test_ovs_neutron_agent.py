@@ -222,18 +222,16 @@ class TestOvsNeutronAgent(base.BaseTestCase):
                 self.assertTrue(device_removed.called)
 
     def test_report_state(self):
-        with contextlib.nested(
-            mock.patch.object(self.agent.int_br, "get_vif_port_set"),
-            mock.patch.object(self.agent.state_rpc, "report_state")
-        ) as (get_vif_fn, report_st):
-            get_vif_fn.return_value = ["vif123", "vif234"]
+        with mock.patch.object(self.agent.state_rpc,
+                               "report_state") as report_st:
+            self.agent.int_br_device_count = 5
             self.agent._report_state()
-            self.assertTrue(get_vif_fn.called)
             report_st.assert_called_with(self.agent.context,
                                          self.agent.agent_state)
             self.assertNotIn("start_flag", self.agent.agent_state)
             self.assertEqual(
-                self.agent.agent_state["configurations"]["devices"], 2
+                self.agent.agent_state["configurations"]["devices"],
+                self.agent.int_br_device_count
             )
 
     def test_network_delete(self):
@@ -331,17 +329,13 @@ class TestOvsNeutronAgent(base.BaseTestCase):
                              "int_ofport")
 
     def test_port_unbound(self):
-        with contextlib.nested(
-            mock.patch.object(self.agent.tun_br, "delete_flows"),
-            mock.patch.object(self.agent, "reclaim_local_vlan")
-        ) as (delfl_fn, reclvl_fn):
+        with mock.patch.object(self.agent, "reclaim_local_vlan") as reclvl_fn:
             self.agent.enable_tunneling = True
             lvm = mock.Mock()
             lvm.network_type = "gre"
             lvm.vif_ports = {"vif1": mock.Mock()}
             self.agent.local_vlan_map["netuid12345"] = lvm
             self.agent.port_unbound("vif1", "netuid12345")
-            self.assertTrue(delfl_fn.called)
             self.assertTrue(reclvl_fn.called)
             reclvl_fn.called = False
 

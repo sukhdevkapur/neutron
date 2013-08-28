@@ -15,7 +15,6 @@ jsonrpclib
 kombu>=1.0.4
 netaddr
 python-neutronclient>=2.2.3,<3
-pyudev
 SQLAlchemy>=0.7.8,<=0.7.99
 WebOb>=1.2.3,<1.3
 python-keystoneclient>=0.3.0
