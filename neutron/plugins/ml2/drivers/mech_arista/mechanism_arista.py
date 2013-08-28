@@ -432,8 +432,8 @@ class AristaDriver(driver_api.MechanismDriver):
     def create_network_precommit(self, context):
         """Remember the tenant, and network information."""
 
-        network = context.current()
-        segments = context.network_segments()
+        network = context.current
+        segments = context.network_segments
         network_id = network['id']
         tenant_id = network['tenant_id']
         segmentation_id = segments[0]['segmentation_id']
@@ -446,11 +446,11 @@ class AristaDriver(driver_api.MechanismDriver):
     def create_network_postcommit(self, context):
         """Provision the network on the Arista Hardware."""
 
-        network = context.current()
+        network = context.current
         network_id = network['id']
         network_name = network['name']
         tenant_id = network['tenant_id']
-        segments = context.network_segments()
+        segments = context.network_segments
         vlan_id = segments[0]['segmentation_id']
         with self.eos_sync_lock:
             if self.net_storage.is_network_provisioned(tenant_id, network_id):
@@ -474,8 +474,8 @@ class AristaDriver(driver_api.MechanismDriver):
         We do not store the network names, therefore, no DB store
         action is performed here.
         """
-        new_network = context.current()
-        orig_network = context.original()
+        new_network = context.current
+        orig_network = context.original
         if new_network['name'] != orig_network['name']:
             msg = _('Network name changed to %s') % new_network['name']
             LOG.info(msg)
@@ -486,8 +486,8 @@ class AristaDriver(driver_api.MechanismDriver):
         If network name is changed, a new network create request is
         sent to the Arista Hardware.
         """
-        new_network = context.current()
-        orig_network = context.original()
+        new_network = context.current
+        orig_network = context.original
         if new_network['name'] != orig_network['name']:
             network_id = new_network['id']
             network_name = new_network['name']
@@ -511,7 +511,7 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def delete_network_precommit(self, context):
         """Delete the network infromation from the DB."""
-        network = context.current()
+        network = context.current
         network_id = network['id']
         tenant_id = network['tenant_id']
         with self.eos_sync_lock:
@@ -520,7 +520,7 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def delete_network_postcommit(self, context):
         """Send network delete request to Arista HW."""
-        network = context.current()
+        network = context.current
         network_id = network['id']
         tenant_id = network['tenant_id']
         with self.eos_sync_lock:
@@ -540,7 +540,7 @@ class AristaDriver(driver_api.MechanismDriver):
         A VM information, along with the physical host information
         is saved.
         """
-        port = context.current()
+        port = context.current
         device_id = port['device_id']
         device_owner = port['device_owner']
 
@@ -563,7 +563,7 @@ class AristaDriver(driver_api.MechanismDriver):
         Send provisioning request to Arista Hardware to plug a host
         into appropriate network.
         """
-        port = context.current()
+        port = context.current
         device_id = port['device_id']
         device_owner = port['device_owner']
 
@@ -616,7 +616,7 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def delete_port_precommit(self, context):
         """Delete information about a VM and host from the DB."""
-        port = context.current()
+        port = context.current
 
         # TODO(sukhdev) revisit this once port biniding support is implemented
         host_id = port['binding:host_id']
@@ -636,7 +636,7 @@ class AristaDriver(driver_api.MechanismDriver):
         Send provisioning request to Arista Hardware to unplug a host
         from appropriate network.
         """
-        port = context.current()
+        port = context.current
         device_id = port['device_id']
 
         # TODO(sukhdev) revisit this once port biniding support is implemented

@@ -525,12 +525,15 @@ class FakeNetworkContext():
         self._original_network = original_network
         self._segments = segments
 
+    @property
     def current(self):
         return self._network
 
+    @property
     def original(self):
         return self._original_network
 
+    @property
     def network_segments(self):
         return self._segments
 
@@ -543,11 +546,14 @@ class FakePortContext():
         self._original_port = original_port
         self._network_context = network
 
+    @property
     def current(self):
         return self._port
 
+    @property
     def original(self):
         return self._original_port
 
+    @property
     def network(self):
         return self._network_context
