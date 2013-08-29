@@ -15,12 +15,12 @@
 # limitations under the License.
 
 import mock
+from oslo.config import cfg
 
 from neutron.plugins.ml2.drivers.mech_arista import db
 from neutron.plugins.ml2.drivers.mech_arista import exceptions as arista_exc
 from neutron.plugins.ml2.drivers.mech_arista import mechanism_arista as arista
 from neutron.tests import base
-from oslo.config import cfg
 
 
 def setup_arista_wrapper_config(value=None):
@@ -380,6 +380,10 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
         self.net_storage.initialize_db()
         self.drv = arista.AristaDriver(self.fake_rpc, self.net_storage)
         self.storage_drv = db.ProvisionedNetsStorage()
+
+    def tearDown(self):
+        super(RealNetStorageAristaDriverTestCase, self).tearDown()
+        self.drv.stop_synchronization_thread()
 
     def test_create_and_delete_network(self):
         tenant_id = 'ten-1'

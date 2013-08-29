@@ -27,29 +27,43 @@ OpenStack/Neutron controllers.
 
 ARISTA_DRIVER_OPTS = [
     cfg.StrOpt('eapi_username',
-               default=None,
-               help=_('Username for Arista EOS')),
+               default='',
+               help=_('Username for Arista EOS. This is required field.'
+                      'if not set, all communications to Arista EOS'
+                      'will fail')),
     cfg.StrOpt('eapi_password',
-               default=None,
+               default='',
                secret=True,  # do not expose value in the logs
-               help=_('Password for Arista EOS')),
+               help=_('Password for Arista EOS. This is required field.'
+                      'if not set, all communications to Arista EOS'
+                      'will fail')),
     cfg.StrOpt('eapi_host',
-               default=None,
-               help=_('Arista EOS host IP')),
+               default='',
+               help=_('Arista EOS IP address. This is required field.'
+                      'If not set, all communications to Arista EOS'
+                      'will fail')),
     cfg.BoolOpt('use_fqdn',
                 default=True,
-                help=_('Defines if hostnames are sent to Arista EOS as FQDNs '
-                       '("node1.domain.com") or as short names ("node1")')),
+                help=_('Defines if hostnames are sent to Arista EOS as FQDNs'
+                       '("node1.domain.com") or as short names ("node1").'
+                       'This is optional. If not set, a value of "True"'
+                       'is assumed.')),
     cfg.IntOpt('sync_interval',
                default=180,
-               help=_('Sync interval in seconds between Neutron plugin and '
+               help=_('Sync interval in seconds between Neutron plugin and'
                       'EOS. This interval defines how often the'
-                      'synchronization is performed')),
+                      'synchronization is performed. This is an optional'
+                      'field. If not set, a value of 180 seconds is assumed')),
     cfg.StrOpt('region_name',
                default='RegionOne',
-               help=_('Region name assigned to this OpenStack Controller '
-                      'This is useful when multiple Openstack/Neutron '
-                      'controllers are managining same Arista HW clusters'))
+               help=_('Defines Region Name that is assigned to this OpenStack'
+                      'Controller. This is useful when multiple'
+                      'OpenStack/Neutron controllers are managing the same'
+                      'Arista HW clusters. Note that this name must match with'
+                      'the region name registered (or known) to keystone'
+                      'service. Authentication with Keysotne is performed by'
+                      'EOS. This is optional. If not set, a value of'
+                      '"RegionOne" is assumed'))
 ]
 
 cfg.CONF.register_opts(ARISTA_DRIVER_OPTS, "ml2_arista")

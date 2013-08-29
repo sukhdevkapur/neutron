@@ -1,7 +1,7 @@
 
 Arista Neutron ML2 Mechanism Driver
 
-This mechanism driver implements ML2 Driver APIi and is used to manage the virtual and physical networks using Arista Hardware. 
+This mechanism driver implements ML2 Driver API and is used to manage the virtual and physical networks using Arista Hardware.
 
 Note: Initial verison of this driver support VLANs only.
 

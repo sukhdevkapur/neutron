@@ -27,7 +27,7 @@ from neutron.plugins.ml2.drivers.mech_arista import exceptions as arista_exc
 
 LOG = logging.getLogger(__name__)
 
-EOS_UNREACHABLE_MSG = ('Unable to reach EOS')
+EOS_UNREACHABLE_MSG = 'Unable to reach EOS'
 
 
 class AristaRPCWrapper(object):
@@ -419,6 +419,7 @@ class AristaDriver(driver_api.MechanismDriver):
 
         confg = cfg.CONF.ml2_arista
         self.segmentation_type = db.VLAN_SEGMENTATION
+        self.timer = None
         self.eos = SyncService(self.net_storage, self.rpc, self.ndb)
         self.sync_timeout = confg['sync_interval']
         self.eos_sync_lock = threading.Lock()
@@ -666,8 +667,14 @@ class AristaDriver(driver_api.MechanismDriver):
         with self.eos_sync_lock:
             self.eos.synchronize()
 
-        t = threading.Timer(self.sync_timeout, self._synchronization_thread)
-        t.start()
+        self.timer = threading.Timer(self.sync_timeout,
+                                     self._synchronization_thread)
+        self.timer.start()
+
+    def stop_synchronization_thread(self):
+        if self.timer:
+            self.timer.cancel()
+            self.timer = None
 
     def _cleanupDb(self):
         """Clean up any uncessary entries in our DB."""
