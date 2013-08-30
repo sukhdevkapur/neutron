@@ -57,9 +57,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
         db.remember_tenant(tenant_id)
         db.forget_tenant(tenant_id)
-
         net_provisioned = db.is_tenant_provisioned(tenant_id)
-
         self.assertFalse(net_provisioned, 'The Tenant should be deleted')
 
     def test_network_is_remembered(self):
@@ -78,9 +76,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
         db.remember_network(tenant_id, network_id, '123')
         db.forget_network(tenant_id, network_id)
-
         net_provisioned = db.is_network_provisioned(tenant_id, network_id)
-
         self.assertFalse(net_provisioned, 'The network should be deleted')
 
     def test_vm_is_remembered(self):
@@ -104,10 +100,8 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
         db.remember_vm(vm_id, host_id, port_id, network_id, tenant_id)
         db.forget_vm(vm_id, host_id, port_id, network_id, tenant_id)
-
         vm_provisioned = db.is_vm_provisioned(vm_id, host_id, port_id,
                                               network_id, tenant_id)
-
         self.assertFalse(vm_provisioned, 'The vm should be deleted')
 
     def test_remembers_multiple_networks(self):
@@ -118,7 +112,6 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
             db.remember_network(tenant_id, net_id, 123)
 
         num_nets_provisioned = db.num_nets_provisioned(tenant_id)
-
         self.assertEqual(expected_num_nets, num_nets_provisioned,
                          'There should be %d nets, not %d' %
                          (expected_num_nets, num_nets_provisioned))
@@ -135,7 +128,6 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
         num_nets_provisioned = db.num_nets_provisioned(tenant_id)
         expected = old_nets
-
         self.assertEqual(expected, num_nets_provisioned,
                          'There should be %d nets, not %d' %
                          (expected, num_nets_provisioned))
@@ -147,7 +139,6 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
             db.remember_tenant(tenant_id)
 
         num_tenants_provisioned = db.num_provisioned_tenants()
-
         self.assertEqual(expected_num_tenants, num_tenants_provisioned,
                          'There should be %d tenants, not %d' %
                          (expected_num_tenants, num_tenants_provisioned))
@@ -161,9 +152,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
             db.forget_tenant(tenant_id)
 
         num_tenants_provisioned = db.num_provisioned_tenants()
-
         expected = 0
-
         self.assertEqual(expected, num_tenants_provisioned,
                          'There should be %d tenants, not %d' %
                          (expected, num_tenants_provisioned))
@@ -209,7 +198,6 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         db.remember_network(tenant, network2_id, vlan2_id)
 
         net_list = db.get_networks(tenant)
-
         self.assertTrue(net_list == expected_eos_net_list, ('%s != %s' %
                         (net_list, expected_eos_net_list)))
 
@@ -356,7 +344,6 @@ class NegativeRPCWrapperTestCase(base.BaseTestCase):
 
         drv._server = mock.MagicMock()
         drv._server.runCmds.side_effect = Exception('server error')
-
         self.assertRaises(arista_exc.AristaRpcError, drv.get_tenants)
 
 
@@ -386,23 +373,18 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
                                                     network_id,
                                                     segmentation_id)
         self.drv.create_network_precommit(network_context)
-
         net_provisioned = db.is_network_provisioned(tenant_id, network_id)
-
         self.assertTrue(net_provisioned, 'The network should be created')
 
         expected_num_nets = 1
         num_nets_provisioned = db.num_nets_provisioned(tenant_id)
-
         self.assertEqual(expected_num_nets, num_nets_provisioned,
                          'There should be %d nets, not %d' %
                          (expected_num_nets, num_nets_provisioned))
 
         #Now test the delete network
         self.drv.delete_network_precommit(network_context)
-
         net_provisioned = db.is_network_provisioned(tenant_id, network_id)
-
         self.assertFalse(net_provisioned, 'The network should be created')
 
         expected_num_nets = 0
@@ -423,7 +405,6 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
             self.drv.create_network_precommit(network_context)
 
         num_nets_provisioned = db.num_nets_provisioned(tenant_id)
-
         self.assertEqual(expected_num_nets, num_nets_provisioned,
                          'There should be %d nets, not %d' %
                          (expected_num_nets, num_nets_provisioned))
