@@ -270,8 +270,7 @@ class SyncService(object):
     ensures that Networks and VMs configured on EOS/Arista HW
     are always in sync with Neutron DB.
     """
-    def __init__(self, net_storage, rpc_wrapper, neutron_db):
-        self._db = net_storage
+    def __init__(self, rpc_wrapper, neutron_db):
         self._rpc = rpc_wrapper
         self._ndb = neutron_db
 
@@ -286,7 +285,7 @@ class SyncService(object):
             LOG.warning(msg)
             return
 
-        db_tenants = self._db.get_tenants()
+        db_tenants = db.get_tenants()
 
         if not db_tenants and eos_tenants:
             # No tenants configured in Neutron. Clear all EOS state
@@ -316,8 +315,8 @@ class SyncService(object):
         # to ensure that networks and VMs match on both sides for
         # each tenant.
         for tenant in db_tenants:
-            db_nets = self._db.get_networks(tenant)
-            db_vms = self._db.get_vms(tenant)
+            db_nets = db.get_networks(tenant)
+            db_vms = db.get_vms(tenant)
             eos_nets = self._get_eos_networks(eos_tenants, tenant)
             eos_vms = self._get_eos_vms(eos_tenants, tenant)
 
@@ -410,17 +409,16 @@ class AristaDriver(driver_api.MechanismDriver):
     Does not send network provisioning request if the network has already been
     provisioned before for the given port.
     """
-    def __init__(self, rpc=None, net_storage=db.ProvisionedNetsStorage()):
+    def __init__(self, rpc=None):
 
         self.rpc = rpc or AristaRPCWrapper()
         self.ndb = db.NeutronNets()
-        self.net_storage = net_storage
-        self.net_storage.initialize_db()
+        db.initialize_db()
 
         confg = cfg.CONF.ml2_arista
         self.segmentation_type = db.VLAN_SEGMENTATION
         self.timer = None
-        self.eos = SyncService(self.net_storage, self.rpc, self.ndb)
+        self.eos = SyncService(self.rpc, self.ndb)
         self.sync_timeout = confg['sync_interval']
         self.eos_sync_lock = threading.Lock()
 
@@ -439,10 +437,10 @@ class AristaDriver(driver_api.MechanismDriver):
         tenant_id = network['tenant_id']
         segmentation_id = segments[0]['segmentation_id']
         with self.eos_sync_lock:
-            self.net_storage.remember_tenant(tenant_id)
-            self.net_storage.remember_network(tenant_id,
-                                              network_id,
-                                              segmentation_id)
+            db.remember_tenant(tenant_id)
+            db.remember_network(tenant_id,
+                                network_id,
+                                segmentation_id)
 
     def create_network_postcommit(self, context):
         """Provision the network on the Arista Hardware."""
@@ -454,7 +452,7 @@ class AristaDriver(driver_api.MechanismDriver):
         segments = context.network_segments
         vlan_id = segments[0]['segmentation_id']
         with self.eos_sync_lock:
-            if self.net_storage.is_network_provisioned(tenant_id, network_id):
+            if db.is_network_provisioned(tenant_id, network_id):
                 try:
                     self.rpc.create_network(tenant_id,
                                             network_id,
@@ -495,8 +493,7 @@ class AristaDriver(driver_api.MechanismDriver):
             tenant_id = new_network['tenant_id']
             vlan_id = new_network['provider:segmentation_id']
             with self.eos_sync_lock:
-                if self.net_storage.is_network_provisioned(tenant_id,
-                                                           network_id):
+                if db.is_network_provisioned(tenant_id, network_id):
                     try:
                         self.rpc.create_network(tenant_id,
                                                 network_id,
@@ -516,8 +513,8 @@ class AristaDriver(driver_api.MechanismDriver):
         network_id = network['id']
         tenant_id = network['tenant_id']
         with self.eos_sync_lock:
-            if self.net_storage.is_network_provisioned(tenant_id, network_id):
-                self.net_storage.forget_network(tenant_id, network_id)
+            if db.is_network_provisioned(tenant_id, network_id):
+                db.forget_network(tenant_id, network_id)
 
     def delete_network_postcommit(self, context):
         """Send network delete request to Arista HW."""
@@ -555,8 +552,8 @@ class AristaDriver(driver_api.MechanismDriver):
             network_id = port['network_id']
             tenant_id = port['tenant_id']
             with self.eos_sync_lock:
-                self.net_storage.remember_vm(device_id, host, port_id,
-                                             network_id, tenant_id)
+                db.remember_vm(device_id, host, port_id,
+                               network_id, tenant_id)
 
     def create_port_postcommit(self, context):
         """Plug a physical host into a network.
@@ -579,18 +576,17 @@ class AristaDriver(driver_api.MechanismDriver):
             network_id = port['network_id']
             tenant_id = port['tenant_id']
             with self.eos_sync_lock:
-                s = self.net_storage
                 hostname = self._host_name(host)
-                segmentation_id = s.get_segmentation_id(tenant_id,
-                                                        network_id)
-                vm_provisioned = s.is_vm_provisioned(device_id,
-                                                     host,
-                                                     port_id,
-                                                     network_id,
-                                                     tenant_id)
-                net_provisioned = s.is_network_provisioned(tenant_id,
-                                                           network_id,
-                                                           segmentation_id)
+                segmentation_id = db.get_segmentation_id(tenant_id,
+                                                         network_id)
+                vm_provisioned = db.is_vm_provisioned(device_id,
+                                                      host,
+                                                      port_id,
+                                                      network_id,
+                                                      tenant_id)
+                net_provisioned = db.is_network_provisioned(tenant_id,
+                                                            network_id,
+                                                            segmentation_id)
                 if vm_provisioned and net_provisioned:
                     try:
                         self.rpc.plug_host_into_network(device_id,
@@ -626,10 +622,10 @@ class AristaDriver(driver_api.MechanismDriver):
         network_id = port['network_id']
         port_id = port['id']
         with self.eos_sync_lock:
-            if self.net_storage.is_vm_provisioned(device_id, host_id, port_id,
-                                                  network_id, tenant_id):
-                self.net_storage.forget_vm(device_id, host_id, port_id,
-                                           network_id, tenant_id)
+            if db.is_vm_provisioned(device_id, host_id, port_id,
+                                    network_id, tenant_id):
+                db.forget_vm(device_id, host_id, port_id,
+                             network_id, tenant_id)
 
     def delete_port_postcommit(self, context):
         """unPlug a physical host from a network.
@@ -678,13 +674,13 @@ class AristaDriver(driver_api.MechanismDriver):
 
     def _cleanupDb(self):
         """Clean up any uncessary entries in our DB."""
-        db_tenants = self.net_storage.get_tenants()
+        db_tenants = db.get_tenants()
         for tenant in db_tenants:
             neutron_nets = self.ndb.get_all_networks_for_tenant(tenant)
             neutron_nets_id = []
             for net in neutron_nets:
                 neutron_nets_id.append(net['id'])
-            db_nets = self.net_storage.get_networks(tenant)
+            db_nets = db.get_networks(tenant)
             for net_id in db_nets.keys():
                 if net_id not in neutron_nets_id:
-                    self.net_storage.forget_network(tenant, net_id)
+                    db.forget_network(tenant, net_id)
