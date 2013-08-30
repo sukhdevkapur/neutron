@@ -134,6 +134,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         nets = ['id%s' % n for n in range(num_nets)]
         for net_id in nets:
             self.drv.remember_network(tenant_id, net_id, 123)
+        for net_id in nets:
             self.drv.forget_network(tenant_id, net_id)
 
         num_nets_provisioned = self.drv.num_nets_provisioned(tenant_id)

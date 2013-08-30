@@ -18,14 +18,14 @@
 """DB Migration for Arista ml2 mechanism driver
 
 Revision ID: 14f24494ca31
-Revises: 3c6e57a23db4
+Revises: 63afba73813
 Create Date: 2013-08-15 18:54:16.083640
 
 """
 
 # revision identifiers, used by Alembic.
 revision = '14f24494ca31'
-down_revision = '3c6e57a23db4'
+down_revision = '63afba73813'
 
 # Change to ['*'] if this migration applies to all plugins
 
