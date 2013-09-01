@@ -515,6 +515,8 @@ class AristaDriver(driver_api.MechanismDriver):
         with self.eos_sync_lock:
             if db.is_network_provisioned(tenant_id, network_id):
                 db.forget_network(tenant_id, network_id)
+            # if necessary, delete tenant as well.
+            self.delete_tenant(tenant_id)
 
     def delete_network_postcommit(self, context):
         """Send network delete request to Arista HW."""
@@ -626,6 +628,8 @@ class AristaDriver(driver_api.MechanismDriver):
                                     network_id, tenant_id):
                 db.forget_vm(device_id, host_id, port_id,
                              network_id, tenant_id)
+            # if necessary, delete tenant as well.
+            self.delete_tenant(tenant_id)
 
     def delete_port_postcommit(self, context):
         """unPlug a physical host from a network.
@@ -654,6 +658,17 @@ class AristaDriver(driver_api.MechanismDriver):
         except arista_exc.AristaRpcError:
             LOG.info(EOS_UNREACHABLE_MSG)
             raise ml2_exc.MechanismDriverError()
+
+    def delete_tenant(self, tenant_id):
+        """delete a tenant from DB.
+
+        A tenant is deleted only if there is no network or VM configured
+        configured for this tenant.
+        """
+        objects_for_tenant = (db.num_nets_provisioned(tenant_id) +
+                              db.num_vms_provisioned(tenant_id))
+        if not objects_for_tenant:
+            db.forget_tenant(tenant_id)
 
     def _host_name(self, hostname):
         fqdns_used = cfg.CONF.ml2_arista['use_fqdn']

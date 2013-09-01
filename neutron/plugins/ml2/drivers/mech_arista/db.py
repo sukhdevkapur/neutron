@@ -298,6 +298,17 @@ def num_nets_provisioned(tenant_id):
                 filter_by(tenant_id=tenant_id).count())
 
 
+def num_vms_provisioned(tenant_id):
+    """Returns number of VMs for a given tennat.
+
+    :param tenant_id: globally unique neutron tenant identifier
+    """
+    session = db.get_session()
+    with session.begin():
+        return (session.query(AristaProvisionedVms).
+                filter_by(tenant_id=tenant_id).count())
+
+
 def get_networks(tenant_id):
     """Returns all networks for a given tenant in EOS-compatible format.
 
