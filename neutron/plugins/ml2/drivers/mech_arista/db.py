@@ -142,14 +142,14 @@ def num_provisioned_tenants():
     """Returns number of tenants stored in repository."""
     session = db.get_session()
     with session.begin():
-        return (session.query(AristaProvisionedTenants).count())
+        return session.query(AristaProvisionedTenants).count()
 
 
 def remember_vm(vm_id, host_id, port_id, network_id, tenant_id):
     """Stores all relevent information about a VM in repository.
 
     :param vm_id: globally unique identifier for VM instance
-    :param host: ID of the host where the VM is placed
+    :param host_id: ID of the host where the VM is placed
     :param port_id: globally unique port ID that connects VM to network
     :param network_id: globally unique neutron network identifier
     :param tenant_id: globally unique neutron tenant identifier
@@ -171,7 +171,7 @@ def forget_vm(vm_id, host_id, port_id, network_id, tenant_id):
     """Removes all relevent information about a VM from repository.
 
     :param vm_id: globally unique identifier for VM instance
-    :param host: ID of the host where the VM is placed
+    :param host_id: ID of the host where the VM is placed
     :param port_id: globally unique port ID that connects VM to network
     :param network_id: globally unique neutron network identifier
     :param tenant_id: globally unique neutron tenant identifier
@@ -235,7 +235,7 @@ def is_vm_provisioned(vm_id, host_id, port_id,
 
     :returns: True, if yes; False otherwise.
     :param vm_id: globally unique identifier for VM instance
-    :param host: ID of the host where the VM is placed
+    :param host_id: ID of the host where the VM is placed
     :param port_id: globally unique port ID that connects VM to network
     :param network_id: globally unique neutron network identifier
     :param tenant_id: globally unique neutron tenant identifier
@@ -279,7 +279,6 @@ def is_tenant_provisioned(tenant_id):
     :returns: True, if yes; False otherwise.
     :param tenant_id: globally unique neutron tenant identifier
     """
-    num_tenants = 0
     session = db.get_session()
     with session.begin():
         num_tenants = (session.query(AristaProvisionedTenants).
@@ -322,8 +321,8 @@ def get_networks(tenant_id):
         # 'if cond is not None'
         none = None
         all_nets = (session.query(model).
-                    filter(model.tenant_id != none).
-                    filter(model.segmentation_id != none))
+                    filter(model.tenant_id == tenant_id,
+                           model.segmentation_id != none))
         res = {}
         for net in all_nets:
             res[net.network_id] = net.eos_network_representation(
@@ -343,11 +342,11 @@ def get_vms(tenant_id):
         # 'if cond is not None'
         none = None
         all_vms = (session.query(model).
-                   filter(model.tenant_id != none).
-                   filter(model.host_id != none).
-                   filter(model.vm_id != none).
-                   filter(model.network_id != none).
-                   filter(model.port_id != none))
+                   filter(model.tenant_id == tenant_id,
+                          model.host_id != none,
+                          model.vm_id != none,
+                          model.network_id != none,
+                          model.port_id != none))
         res = {}
         for vm in all_vms:
             res[vm.vm_id] = vm.eos_vm_representation()
@@ -366,11 +365,11 @@ def get_ports(tenant_id):
         # 'if cond is not None'
         none = None
         all_ports = (session.query(model).
-                     filter(model.tenant_id != none).
-                     filter(model.host_id != none).
-                     filter(model.vm_id != none).
-                     filter(model.network_id != none).
-                     filter(model.port_id != none))
+                     filter(model.tenant_id == tenant_id,
+                            model.host_id != none,
+                            model.vm_id != none,
+                            model.network_id != none,
+                            model.port_id != none))
         res = {}
         for port in all_ports:
             res[port.port_id] = port.eos_port_representation()

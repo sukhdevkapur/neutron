@@ -117,7 +117,7 @@ class AristaRPCWrapper(object):
         if network_name:
             cmds.append('network id %s name %s' % (network_id, network_name))
         else:
-            cmds.append('network id %s' % (network_id))
+            cmds.append('network id %s' % network_id)
         cmds.append('segment 1 type vlan id %d' % seg_id)
         cmds.append('exit')
         cmds.append('exit')
@@ -145,7 +145,7 @@ class AristaRPCWrapper(object):
             for seg in segments:
                 cmds.append('segment %d type %s id %d' % (seg_num,
                             seg['network_type'], seg['segmentation_id']))
-                seg_num = seg_num + 1
+                seg_num += 1
             cmds.append('exit')  # exit for segment mode
             cmds.append('exit')  # exit for network mode
             cmds.append('exit')  # exit for tenant mode
@@ -225,8 +225,6 @@ class AristaRPCWrapper(object):
 
         LOG.info(_('Executing command on Arista EOS: %s'), full_command)
 
-        ret = None
-
         try:
             # this returns array of return values for every command in
             # full_command list
@@ -239,7 +237,7 @@ class AristaRPCWrapper(object):
             host = cfg.CONF.ml2_arista.eapi_host
             msg = ('Error %s while trying to execute commands %s on EOS %s' %
                    (error, full_command, host))
-            LOG.error(_("%s"), msg)
+            LOG.exception(_("%s"), msg)
             raise arista_exc.AristaRpcError(msg=msg)
 
         return ret
@@ -333,7 +331,6 @@ class SyncService(object):
             # delete VMs from EOS if it is not present in neutron DB
             for vm_id in eos_vms:
                 if vm_id not in db_vms:
-                    vm = eos_vms[vm_id]
                     try:
                         self._rpc.delete_vm(tenant, vm_id)
                     except arista_exc.AristaRpcError:
@@ -413,7 +410,6 @@ class AristaDriver(driver_api.MechanismDriver):
 
         self.rpc = rpc or AristaRPCWrapper()
         self.ndb = db.NeutronNets()
-        db.initialize_db()
 
         confg = cfg.CONF.ml2_arista
         self.segmentation_type = db.VLAN_SEGMENTATION

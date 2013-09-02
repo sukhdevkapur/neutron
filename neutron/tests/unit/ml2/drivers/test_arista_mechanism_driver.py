@@ -181,25 +181,25 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
         db.forget_vm('vm3', host_id, port_id, network_id, tenant_id)
 
     def test_get_network_list_returns_eos_compatible_data(self):
-        tenant = 'test-1'
+        tenant = u'test-1'
         segm_type = 'vlan'
-        network_id = '123'
-        network2_id = '1234'
+        network_id = u'123'
+        network2_id = u'1234'
         vlan_id = 123
         vlan2_id = 1234
-        expected_eos_net_list = {network_id: {'networkId': network_id,
-                                              'segmentationTypeId': vlan_id,
-                                              'segmentationType': segm_type},
-                                 network2_id: {'networkId': network2_id,
-                                               'segmentationTypeId': vlan2_id,
-                                               'segmentationType': segm_type}}
+        expected_eos_net_list = {network_id: {u'networkId': network_id,
+                                              u'segmentationTypeId': vlan_id,
+                                              u'segmentationType': segm_type},
+                                 network2_id: {u'networkId': network2_id,
+                                               u'segmentationTypeId': vlan2_id,
+                                               u'segmentationType': segm_type}}
 
         db.remember_network(tenant, network_id, vlan_id)
         db.remember_network(tenant, network2_id, vlan2_id)
 
         net_list = db.get_networks(tenant)
-        self.assertTrue(net_list == expected_eos_net_list, ('%s != %s' %
-                        (net_list, expected_eos_net_list)))
+        self.assertNotEqual(net_list != expected_eos_net_list, ('%s != %s' %
+                            (net_list, expected_eos_net_list)))
 
 
 class PositiveRPCWrapperValidConfigTestCase(base.BaseTestCase):
