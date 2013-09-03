@@ -17,6 +17,7 @@
 import mock
 from oslo.config import cfg
 
+import neutron.db.api as ndb
 from neutron.plugins.ml2.drivers.mech_arista import db
 from neutron.plugins.ml2.drivers.mech_arista import exceptions as arista_exc
 from neutron.plugins.ml2.drivers.mech_arista import mechanism_arista as arista
@@ -43,7 +44,7 @@ class AristaProvisionedVlansStorageTestCase(base.BaseTestCase):
 
     def setUp(self):
         super(AristaProvisionedVlansStorageTestCase, self).setUp()
-        db.initialize_db()
+        ndb.configure_db()
 
     def test_tenant_is_remembered(self):
         tenant_id = 'test'
@@ -357,7 +358,7 @@ class RealNetStorageAristaDriverTestCase(base.BaseTestCase):
     def setUp(self):
         super(RealNetStorageAristaDriverTestCase, self).setUp()
         self.fake_rpc = mock.MagicMock()
-        db.initialize_db()
+        ndb.configure_db()
         self.drv = arista.AristaDriver(self.fake_rpc)
 
     def tearDown(self):

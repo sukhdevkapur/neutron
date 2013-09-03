@@ -40,11 +40,6 @@ class AristaProvisionedNets(model_base.BASEV2, models_v2.HasId,
     network_id = sa.Column(sa.String(UUID_LEN))
     segmentation_id = sa.Column(sa.Integer)
 
-    def __init__(self, tenant_id, network_id, segmentation_id=None):
-        self.tenant_id = tenant_id
-        self.network_id = network_id
-        self.segmentation_id = segmentation_id
-
     def eos_network_representation(self, segmentation_type):
         return {u'networkId': self.network_id,
                 u'segmentationTypeId': self.segmentation_id,
@@ -64,13 +59,6 @@ class AristaProvisionedVms(model_base.BASEV2, models_v2.HasId,
     host_id = sa.Column(sa.String(STR_LEN))
     port_id = sa.Column(sa.String(UUID_LEN))
     network_id = sa.Column(sa.String(UUID_LEN))
-
-    def __init__(self, vm_id, host_id, port_id, network_id, tenant_id):
-        self.vm_id = vm_id
-        self.host_id = host_id
-        self.port_id = port_id
-        self.network_id = network_id
-        self.tenant_id = tenant_id
 
     def eos_vm_representation(self):
         return {u'vmId': self.vm_id,
@@ -93,15 +81,8 @@ class AristaProvisionedTenants(model_base.BASEV2, models_v2.HasId,
     """
     __tablename__ = 'arista_provisioned_tenants'
 
-    def __init__(self, tenant_id):
-        self.tenant_id = tenant_id
-
     def eos_tenant_representation(self):
         return {u'tenantId': self.tenant_id}
-
-
-def initialize_db():
-    db.configure_db()
 
 
 def remember_tenant(tenant_id):
@@ -115,7 +96,8 @@ def remember_tenant(tenant_id):
                   filter_by(tenant_id=tenant_id).first())
 
         if not tenant:
-            tenant = AristaProvisionedTenants(tenant_id)
+            tenant = AristaProvisionedTenants(
+                tenant_id=tenant_id)
             session.add(tenant)
 
 
@@ -162,8 +144,12 @@ def remember_vm(vm_id, host_id, port_id, network_id, tenant_id):
                         network_id=network_id).first())
 
         if not vm:
-            vm = AristaProvisionedVms(vm_id, host_id, port_id,
-                                      network_id, tenant_id)
+            vm = AristaProvisionedVms(
+                vm_id=vm_id,
+                host_id=host_id,
+                port_id=port_id,
+                network_id=network_id,
+                tenant_id=tenant_id)
             session.add(vm)
 
 
@@ -198,7 +184,10 @@ def remember_network(tenant_id, network_id, segmentation_id):
                          network_id=network_id).first())
 
         if not net:
-            net = AristaProvisionedNets(tenant_id, network_id, segmentation_id)
+            net = AristaProvisionedNets(
+                tenant_id=tenant_id,
+                network_id=network_id,
+                segmentation_id=segmentation_id)
             session.add(net)
 
 
@@ -323,10 +312,11 @@ def get_networks(tenant_id):
         all_nets = (session.query(model).
                     filter(model.tenant_id == tenant_id,
                            model.segmentation_id != none))
-        res = {}
-        for net in all_nets:
-            res[net.network_id] = net.eos_network_representation(
-                VLAN_SEGMENTATION)
+        res = dict(
+            (net.network_id, net.eos_network_representation(
+                VLAN_SEGMENTATION))
+            for net in all_nets
+        )
         return res
 
 
@@ -347,9 +337,10 @@ def get_vms(tenant_id):
                           model.vm_id != none,
                           model.network_id != none,
                           model.port_id != none))
-        res = {}
-        for vm in all_vms:
-            res[vm.vm_id] = vm.eos_vm_representation()
+        res = dict(
+            (vm.vm_id, vm.eos_vm_representation())
+            for vm in all_vms
+        )
         return res
 
 
@@ -370,9 +361,10 @@ def get_ports(tenant_id):
                             model.vm_id != none,
                             model.network_id != none,
                             model.port_id != none))
-        res = {}
-        for port in all_ports:
-            res[port.port_id] = port.eos_port_representation()
+        res = dict(
+            (port.port_id, port.eos_port_representation())
+            for port in all_ports
+        )
         return res
 
 
@@ -382,9 +374,10 @@ def get_tenants():
     with session.begin():
         model = AristaProvisionedTenants
         all_tenants = session.query(model)
-        res = {}
-        for tenant in all_tenants:
-            res[tenant.tenant_id] = tenant.eos_tenant_representation()
+        res = dict(
+            (tenant.tenant_id, tenant.eos_tenant_representation())
+            for tenant in all_tenants
+        )
         return res
 
 
