@@ -38,6 +38,7 @@ IPv6 = 'IPv6'
 ICMP_PROTOCOL = 1
 TCP_PROTOCOL = 6
 UDP_PROTOCOL = 17
+ICMPv6_PROTOCOL = 58
 
 DHCP_RESPONSE_PORT = 68
 
@@ -69,6 +70,7 @@ AGENT_TYPE_LINUXBRIDGE = 'Linux bridge agent'
 AGENT_TYPE_NEC = 'NEC plugin agent'
 AGENT_TYPE_L3 = 'L3 agent'
 AGENT_TYPE_LOADBALANCER = 'Loadbalancer agent'
+AGENT_TYPE_MLNX = 'Mellanox plugin agent'
 L2_AGENT_TOPIC = 'N/A'
 
 PAGINATION_INFINITE = 'infinite'

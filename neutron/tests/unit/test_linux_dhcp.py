@@ -23,12 +23,23 @@ from oslo.config import cfg
 from neutron.agent.common import config
 from neutron.agent.linux import dhcp
 from neutron.common import config as base_config
+from neutron.openstack.common import log as logging
 from neutron.tests import base
+
+LOG = logging.getLogger(__name__)
 
 
 class FakeIPAllocation:
     def __init__(self, address):
         self.ip_address = address
+
+
+class DhcpOpt(object):
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __str__(self):
+        return str(self.__dict__)
 
 
 class FakePort1:
@@ -37,12 +48,18 @@ class FakePort1:
     fixed_ips = [FakeIPAllocation('192.168.0.2')]
     mac_address = '00:00:80:aa:bb:cc'
 
+    def __init__(self):
+        self.extra_dhcp_opts = []
+
 
 class FakePort2:
     id = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
     admin_state_up = False
     fixed_ips = [FakeIPAllocation('fdca:3ba5:a17a:4ba3::2')]
     mac_address = '00:00:f3:aa:bb:cc'
+
+    def __init__(self):
+        self.extra_dhcp_opts = []
 
 
 class FakePort3:
@@ -51,6 +68,9 @@ class FakePort3:
     fixed_ips = [FakeIPAllocation('192.168.0.3'),
                  FakeIPAllocation('fdca:3ba5:a17a:4ba3::3')]
     mac_address = '00:00:0f:aa:bb:cc'
+
+    def __init__(self):
+        self.extra_dhcp_opts = []
 
 
 class FakeV4HostRoute:
@@ -134,18 +154,21 @@ class FakeDualNetwork:
     id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
     subnets = [FakeV4Subnet(), FakeV6Subnet()]
     ports = [FakePort1(), FakePort2(), FakePort3()]
+    namespace = 'qdhcp-ns'
 
 
 class FakeDualNetworkGatewayRoute:
     id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
     subnets = [FakeV4SubnetGatewayRoute(), FakeV6Subnet()]
     ports = [FakePort1(), FakePort2(), FakePort3()]
+    namespace = 'qdhcp-ns'
 
 
 class FakeDualNetworkSingleDHCP:
     id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
     subnets = [FakeV4Subnet(), FakeV4SubnetNoDHCP()]
     ports = [FakePort1(), FakePort2(), FakePort3()]
+    namespace = 'qdhcp-ns'
 
 
 class FakeV4NoGatewayNetwork:
@@ -154,44 +177,101 @@ class FakeV4NoGatewayNetwork:
     ports = [FakePort1()]
 
 
-class TestDhcpBase(base.BaseTestCase):
-    def test_existing_dhcp_networks_abstract_error(self):
-        self.assertRaises(NotImplementedError,
-                          dhcp.DhcpBase.existing_dhcp_networks,
-                          None, None)
+class FakeDualV4Pxe3Ports:
+    id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+    subnets = [FakeV4Subnet(), FakeV4SubnetNoDHCP()]
+    ports = [FakePort1(), FakePort2(), FakePort3()]
+    namespace = 'qdhcp-ns'
 
-    def test_check_version_abstract_error(self):
-        self.assertRaises(NotImplementedError,
-                          dhcp.DhcpBase.check_version)
+    def __init__(self, port_detail="portsSame"):
+        if port_detail == "portsSame":
+            self.ports[0].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[1].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.1.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.1.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux2.0')]
+            self.ports[2].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.1.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.1.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux3.0')]
+        else:
+            self.ports[0].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[1].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.5'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.5'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux2.0')]
+            self.ports[2].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.7'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.7'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux3.0')]
 
-    def test_base_abc_error(self):
-        self.assertRaises(TypeError, dhcp.DhcpBase, None)
 
-    def test_restart(self):
-        class SubClass(dhcp.DhcpBase):
-            def __init__(self):
-                dhcp.DhcpBase.__init__(self, None, None, None)
-                self.called = []
+class FakeV4NetworkPxe2Ports:
+    id = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+    subnets = [FakeV4Subnet()]
+    ports = [FakePort1(), FakePort2()]
+    namespace = 'qdhcp-ns'
 
-            def enable(self):
-                self.called.append('enable')
+    def __init__(self, port_detail="portsSame"):
+        if port_detail == "portsSame":
+            self.ports[0].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[1].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+        else:
+            self.ports[0].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[1].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.5'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.5'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
 
-            def disable(self, retain_port=False):
-                self.called.append('disable %s' % retain_port)
 
-            def reload_allocations(self):
-                pass
+class FakeV4NetworkPxe3Ports:
+    id = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+    subnets = [FakeV4Subnet()]
+    ports = [FakePort1(), FakePort2(), FakePort3()]
+    namespace = 'qdhcp-ns'
 
-            def release_lease(self):
-                pass
-
-            @property
-            def active(self):
-                return True
-
-        c = SubClass()
-        c.restart()
-        self.assertEqual(c.called, ['disable True', 'enable'])
+    def __init__(self, port_detail="portsSame"):
+        if port_detail == "portsSame":
+            self.ports[0].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[1].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.1.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.1.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[2].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.1.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.1.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+        else:
+            self.ports[0].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.3'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.2'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux.0')]
+            self.ports[1].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.5'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.5'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux2.0')]
+            self.ports[2].extra_dhcp_opts = [
+                DhcpOpt(opt_name='tftp-server', opt_value='192.168.0.7'),
+                DhcpOpt(opt_name='server-ip-address', opt_value='192.168.0.7'),
+                DhcpOpt(opt_name='bootfile-name', opt_value='pxelinux3.0')]
 
 
 class LocalChild(dhcp.DhcpLocalProcess):
@@ -223,6 +303,9 @@ class TestBase(base.BaseTestCase):
         self.conf = config.setup_conf()
         self.conf.register_opts(base_config.core_opts)
         self.conf.register_opts(dhcp.OPTS)
+        instance = mock.patch("neutron.agent.linux.dhcp.DeviceManager")
+        self.mock_mgr = instance.start()
+        self.addCleanup(self.mock_mgr.stop)
         self.conf.register_opt(cfg.BoolOpt('enable_isolated_metadata',
                                            default=True))
         self.conf(args=args)
@@ -235,6 +318,47 @@ class TestBase(base.BaseTestCase):
         self.addCleanup(self.execute_p.stop)
         self.safe = self.replace_p.start()
         self.execute = self.execute_p.start()
+
+
+class TestDhcpBase(TestBase):
+
+    def test_existing_dhcp_networks_abstract_error(self):
+        self.assertRaises(NotImplementedError,
+                          dhcp.DhcpBase.existing_dhcp_networks,
+                          None, None)
+
+    def test_check_version_abstract_error(self):
+        self.assertRaises(NotImplementedError,
+                          dhcp.DhcpBase.check_version)
+
+    def test_base_abc_error(self):
+        self.assertRaises(TypeError, dhcp.DhcpBase, None)
+
+    def test_restart(self):
+        class SubClass(dhcp.DhcpBase):
+            def __init__(self):
+                dhcp.DhcpBase.__init__(self, cfg.CONF, FakeV4Network(), None)
+                self.called = []
+
+            def enable(self):
+                self.called.append('enable')
+
+            def disable(self, retain_port=False):
+                self.called.append('disable %s' % retain_port)
+
+            def reload_allocations(self):
+                pass
+
+            def release_lease(self):
+                pass
+
+            @property
+            def active(self):
+                return True
+
+        c = SubClass()
+        c.restart()
+        self.assertEqual(c.called, ['disable True', 'enable'])
 
 
 class TestDhcpLocalProcess(TestBase):
@@ -285,18 +409,14 @@ class TestDhcpLocalProcess(TestBase):
                 self.assertTrue(makedirs.called)
 
     def test_enable_already_active(self):
-        delegate = mock.Mock()
-        delegate.setup.return_value = 'tap0'
         with mock.patch.object(LocalChild, 'active') as patched:
             patched.__get__ = mock.Mock(return_value=True)
-            lp = LocalChild(self.conf, FakeV4Network(),
-                            device_delegate=delegate)
+            lp = LocalChild(self.conf, FakeV4Network())
             lp.enable()
 
             self.assertEqual(lp.called, ['restart'])
 
     def test_enable(self):
-        delegate = mock.Mock(return_value='tap0')
         attrs_to_mock = dict(
             [(a, mock.DEFAULT) for a in
             ['active', 'get_conf_file_name', 'interface_name']]
@@ -307,12 +427,12 @@ class TestDhcpLocalProcess(TestBase):
             mocks['get_conf_file_name'].return_value = '/dir'
             mocks['interface_name'].__set__ = mock.Mock()
             lp = LocalChild(self.conf,
-                            FakeDualNetwork(),
-                            device_delegate=delegate)
+                            FakeDualNetwork())
             lp.enable()
 
-            delegate.assert_has_calls(
-                [mock.call.setup(mock.ANY, reuse_existing=True)])
+            self.mock_mgr.assert_has_calls(
+                [mock.call(self.conf, 'sudo', None),
+                 mock.call().setup(mock.ANY, reuse_existing=True)])
             self.assertEqual(lp.called, ['spawn'])
             self.assertTrue(mocks['interface_name'].__set__.called)
 
@@ -345,34 +465,30 @@ class TestDhcpLocalProcess(TestBase):
     def test_disable_retain_port(self):
         attrs_to_mock = dict([(a, mock.DEFAULT) for a in
                               ['active', 'interface_name', 'pid']])
-        delegate = mock.Mock()
         network = FakeDualNetwork()
         with mock.patch.multiple(LocalChild, **attrs_to_mock) as mocks:
             mocks['active'].__get__ = mock.Mock(return_value=True)
             mocks['pid'].__get__ = mock.Mock(return_value=5)
             mocks['interface_name'].__get__ = mock.Mock(return_value='tap0')
-            lp = LocalChild(self.conf, network, device_delegate=delegate,
-                            namespace='qdhcp-ns')
+            lp = LocalChild(self.conf, network)
             lp.disable(retain_port=True)
 
-        self.assertFalse(delegate.called)
-        exp_args = ['kill', '-9', 5]
-        self.execute.assert_called_once_with(exp_args, 'sudo')
+            exp_args = ['kill', '-9', 5]
+            self.execute.assert_called_once_with(exp_args, 'sudo')
 
     def test_disable(self):
         attrs_to_mock = dict([(a, mock.DEFAULT) for a in
                               ['active', 'interface_name', 'pid']])
-        delegate = mock.Mock()
         network = FakeDualNetwork()
         with mock.patch.multiple(LocalChild, **attrs_to_mock) as mocks:
             mocks['active'].__get__ = mock.Mock(return_value=True)
             mocks['pid'].__get__ = mock.Mock(return_value=5)
             mocks['interface_name'].__get__ = mock.Mock(return_value='tap0')
-            lp = LocalChild(self.conf, network, device_delegate=delegate,
-                            namespace='qdhcp-ns')
+            lp = LocalChild(self.conf, network)
             lp.disable()
 
-        delegate.assert_has_calls([mock.call.destroy(network, 'tap0')])
+        self.mock_mgr.assert_has_calls([mock.call(self.conf, 'sudo', None),
+                                        mock.call().destroy(network, 'tap0')])
         exp_args = ['kill', '-9', 5]
         self.execute.assert_called_once_with(exp_args, 'sudo')
 
@@ -451,8 +567,6 @@ class TestDnsmasq(TestBase):
         expected.extend(extra_options)
 
         self.execute.return_value = ('', '')
-        delegate = mock.Mock()
-        delegate.get_interface_name.return_value = 'tap0'
 
         attrs_to_mock = dict(
             [(a, mock.DEFAULT) for a in
@@ -469,8 +583,6 @@ class TestDnsmasq(TestBase):
             with mock.patch.object(dhcp.sys, 'argv') as argv:
                 argv.__getitem__.side_effect = fake_argv
                 dm = dhcp.Dnsmasq(self.conf, FakeDualNetwork(),
-                                  device_delegate=delegate,
-                                  namespace='qdhcp-ns',
                                   version=float(2.59))
                 dm.spawn_process()
                 self.assertTrue(mocks['_output_opts_file'].called)
@@ -584,8 +696,7 @@ tag:tag0,option:router""".lstrip()
         self.safe.assert_called_once_with('/foo/opts', expected)
 
     def test_release_lease(self):
-        dm = dhcp.Dnsmasq(self.conf, FakeDualNetwork(), namespace='qdhcp-ns',
-                          version=float(2.59))
+        dm = dhcp.Dnsmasq(self.conf, FakeDualNetwork(), version=float(2.59))
         dm.release_lease(mac_address=FakePort2.mac_address,
                          removed_ips=[FakePort2.fixed_ips[0].ip_address])
         exp_args = ['ip', 'netns', 'exec', 'qdhcp-ns', 'dhcp_release',
@@ -593,6 +704,101 @@ tag:tag0,option:router""".lstrip()
                     FakePort2.mac_address]
         self.execute.assert_called_once_with(exp_args, root_helper='sudo',
                                              check_exit_code=True)
+
+    def test_output_opts_file_pxe_2port_1net(self):
+        expected = """
+tag:tag0,option:dns-server,8.8.8.8
+tag:tag0,option:classless-static-route,20.0.0.1/24,20.0.0.1
+tag:tag0,249,20.0.0.1/24,20.0.0.1
+tag:tag0,option:router,192.168.0.1
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:tftp-server,192.168.0.3
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:server-ip-address,192.168.0.2
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:bootfile-name,pxelinux.0
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:tftp-server,192.168.0.3
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:server-ip-address,192.168.0.2
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:bootfile-name,pxelinux.0"""
+        expected = expected.lstrip()
+
+        with mock.patch.object(dhcp.Dnsmasq, 'get_conf_file_name') as conf_fn:
+            conf_fn.return_value = '/foo/opts'
+            fp = FakeV4NetworkPxe2Ports()
+            dm = dhcp.Dnsmasq(self.conf, fp, version=float(2.59))
+            dm._output_opts_file()
+
+        self.safe.assert_called_once_with('/foo/opts', expected)
+
+    def test_output_opts_file_pxe_2port_1net_diff_details(self):
+        expected = """
+tag:tag0,option:dns-server,8.8.8.8
+tag:tag0,option:classless-static-route,20.0.0.1/24,20.0.0.1
+tag:tag0,249,20.0.0.1/24,20.0.0.1
+tag:tag0,option:router,192.168.0.1
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:tftp-server,192.168.0.3
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:server-ip-address,192.168.0.2
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:bootfile-name,pxelinux.0
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:tftp-server,192.168.0.5
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:server-ip-address,192.168.0.5
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:bootfile-name,pxelinux.0"""
+        expected = expected.lstrip()
+
+        with mock.patch.object(dhcp.Dnsmasq, 'get_conf_file_name') as conf_fn:
+            conf_fn.return_value = '/foo/opts'
+            dm = dhcp.Dnsmasq(self.conf, FakeV4NetworkPxe2Ports("portsDiff"),
+                              version=float(2.59))
+            dm._output_opts_file()
+
+        self.safe.assert_called_once_with('/foo/opts', expected)
+
+    def test_output_opts_file_pxe_3port_1net_diff_details(self):
+        expected = """
+tag:tag0,option:dns-server,8.8.8.8
+tag:tag0,option:classless-static-route,20.0.0.1/24,20.0.0.1
+tag:tag0,249,20.0.0.1/24,20.0.0.1
+tag:tag0,option:router,192.168.0.1
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:tftp-server,192.168.0.3
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:server-ip-address,192.168.0.2
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:bootfile-name,pxelinux.0
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:tftp-server,192.168.0.5
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:server-ip-address,192.168.0.5
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:bootfile-name,pxelinux2.0
+tag:44444444-4444-4444-4444-444444444444,option:tftp-server,192.168.0.7
+tag:44444444-4444-4444-4444-444444444444,option:server-ip-address,192.168.0.7
+tag:44444444-4444-4444-4444-444444444444,option:bootfile-name,pxelinux3.0"""
+        expected = expected.lstrip()
+
+        with mock.patch.object(dhcp.Dnsmasq, 'get_conf_file_name') as conf_fn:
+            conf_fn.return_value = '/foo/opts'
+            dm = dhcp.Dnsmasq(self.conf,
+                              FakeV4NetworkPxe3Ports("portsDifferent"),
+                              version=float(2.59))
+            dm._output_opts_file()
+
+        self.safe.assert_called_once_with('/foo/opts', expected)
+
+    def test_output_opts_file_pxe_3port_2net(self):
+        expected = """
+tag:tag0,option:dns-server,8.8.8.8
+tag:tag0,option:classless-static-route,20.0.0.1/24,20.0.0.1
+tag:tag0,249,20.0.0.1/24,20.0.0.1
+tag:tag0,option:router,192.168.0.1
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:tftp-server,192.168.0.3
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:server-ip-address,192.168.0.2
+tag:eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee,option:bootfile-name,pxelinux.0
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:tftp-server,192.168.1.3
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:server-ip-address,192.168.1.2
+tag:ffffffff-ffff-ffff-ffff-ffffffffffff,option:bootfile-name,pxelinux2.0
+tag:44444444-4444-4444-4444-444444444444,option:tftp-server,192.168.1.3
+tag:44444444-4444-4444-4444-444444444444,option:server-ip-address,192.168.1.2
+tag:44444444-4444-4444-4444-444444444444,option:bootfile-name,pxelinux3.0"""
+        expected = expected.lstrip()
+
+        with mock.patch.object(dhcp.Dnsmasq, 'get_conf_file_name') as conf_fn:
+            conf_fn.return_value = '/foo/opts'
+            dm = dhcp.Dnsmasq(self.conf, FakeDualV4Pxe3Ports(),
+                              version=float(2.59))
+            dm._output_opts_file()
+
+        self.safe.assert_called_once_with('/foo/opts', expected)
 
     def test_reload_allocations(self):
         exp_host_name = '/dhcp/cccccccc-cccc-cccc-cccc-cccccccccccc/host'
@@ -628,7 +834,6 @@ tag:tag1,249,%s,%s""".lstrip() % (fake_v6,
                 with mock.patch.object(dhcp.Dnsmasq, 'pid') as pid:
                     pid.__get__ = mock.Mock(return_value=5)
                     dm = dhcp.Dnsmasq(self.conf, FakeDualNetwork(),
-                                      namespace='qdhcp-ns',
                                       version=float(2.59))
 
                     method_name = '_make_subnet_interface_ip_map'
@@ -675,7 +880,7 @@ tag:tag1,249,%s,%s""".lstrip() % (fake_v6,
             with mock.patch.object(dhcp.Dnsmasq, 'pid') as pid:
                 pid.__get__ = mock.Mock(return_value=5)
                 dm = dhcp.Dnsmasq(self.conf, FakeDualNetwork(),
-                                  namespace='qdhcp-ns', version=float(2.59))
+                                  version=float(2.59))
 
                 method_name = '_make_subnet_interface_ip_map'
                 with mock.patch.object(dhcp.Dnsmasq, method_name) as ip_map:
@@ -694,8 +899,7 @@ tag:tag1,249,%s,%s""".lstrip() % (fake_v6,
             ]
 
             dm = dhcp.Dnsmasq(self.conf,
-                              FakeDualNetwork(),
-                              namespace='qdhcp-ns')
+                              FakeDualNetwork())
 
             self.assertEqual(
                 dm._make_subnet_interface_ip_map(),

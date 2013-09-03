@@ -987,6 +987,23 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
             for k, v in stats_data.items():
                 self.assertEqual(pool_obj.stats.__dict__[k], v)
 
+    def test_update_pool_stats_members_statuses(self):
+        with self.pool() as pool:
+            pool_id = pool['pool']['id']
+            with self.member(pool_id=pool_id) as member:
+                member_id = member['member']['id']
+                stats_data = {'members': {
+                    member_id: {
+                        'status': 'INACTIVE'
+                    }
+                }}
+                ctx = context.get_admin_context()
+                member = self.plugin.get_member(ctx, member_id)
+                self.assertEqual('PENDING_CREATE', member['status'])
+                self.plugin.update_pool_stats(ctx, pool_id, stats_data)
+                member = self.plugin.get_member(ctx, member_id)
+                self.assertEqual('INACTIVE', member['status'])
+
     def test_get_pool_stats(self):
         keys = [("bytes_in", 0),
                 ("bytes_out", 0),
@@ -1200,15 +1217,54 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
                 self.pool(),
                 self.health_monitor()
             ) as (pool, hm):
-                data = {"health_monitor": {
-                        "id": hm['health_monitor']['id'],
+                data = {'health_monitor': {
+                        'id': hm['health_monitor']['id'],
                         'tenant_id': self._tenant_id}}
                 self.plugin.create_pool_health_monitor(
                     context.get_admin_context(),
                     data, pool['pool']['id']
                 )
+                hm['health_monitor']['pools'] = [
+                    {'pool_id': pool['pool']['id'],
+                     'status': 'PENDING_CREATE',
+                     'status_description': None}]
                 driver_call.assert_called_once_with(
                     mock.ANY, hm['health_monitor'], pool['pool']['id'])
+
+    def test_pool_monitor_list_of_pools(self):
+        with contextlib.nested(
+                self.pool(),
+                self.pool(),
+                self.health_monitor()
+        ) as (p1, p2, hm):
+            ctx = context.get_admin_context()
+            data = {'health_monitor': {
+                    'id': hm['health_monitor']['id'],
+                    'tenant_id': self._tenant_id}}
+            self.plugin.create_pool_health_monitor(
+                ctx, data, p1['pool']['id'])
+            self.plugin.create_pool_health_monitor(
+                ctx, data, p2['pool']['id'])
+            healthmon = self.plugin.get_health_monitor(
+                ctx, hm['health_monitor']['id'])
+            pool_data = [{'pool_id': p1['pool']['id'],
+                          'status': 'PENDING_CREATE',
+                          'status_description': None},
+                         {'pool_id': p2['pool']['id'],
+                          'status': 'PENDING_CREATE',
+                          'status_description': None}]
+            self.assertEqual(sorted(healthmon['pools']),
+                             sorted(pool_data))
+            req = self.new_show_request(
+                'health_monitors',
+                hm['health_monitor']['id'],
+                fmt=self.fmt)
+            hm = self.deserialize(
+                self.fmt,
+                req.get_response(self.ext_api)
+            )
+            self.assertEqual(sorted(hm['health_monitor']['pools']),
+                             sorted(pool_data))
 
     def test_create_pool_health_monitor_already_associated(self):
         with contextlib.nested(
