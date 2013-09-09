@@ -82,7 +82,7 @@ class LoadBalancerCallbacks(object):
             if not agents:
                 return []
             elif len(agents) > 1:
-                LOG.warning(_('Multiple lbaas agents found on host %s') % host)
+                LOG.warning(_('Multiple lbaas agents found on host %s'), host)
 
             pools = self.plugin.list_pools_on_lbaas_agent(context,
                                                           agents[0].id)
@@ -353,12 +353,6 @@ class HaproxyOnHostPluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         # healthmon_id is not used here
         agent = self.get_pool_agent(context, pool_id)
         self.agent_rpc.modify_pool(context, pool_id, agent['host'])
-
-    def create_health_monitor(self, context, health_monitor):
-        pass
-
-    def delete_health_monitor(self, context, health_monitor):
-        self.plugin._delete_db_health_monitor(context, health_monitor["id"])
 
     def stats(self, context, pool_id):
         pass

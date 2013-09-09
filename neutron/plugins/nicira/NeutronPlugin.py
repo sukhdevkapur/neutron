@@ -20,7 +20,6 @@
 # @author: Aaron Rosen, Nicira Networks, Inc.
 
 
-import hashlib
 import logging
 import os
 
@@ -28,20 +27,16 @@ from oslo.config import cfg
 from sqlalchemy.orm import exc as sa_exc
 import webob.exc
 
-from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.api.v2 import attributes as attr
 from neutron.api.v2 import base
 from neutron.common import constants
 from neutron.common import exceptions as q_exc
-from neutron.common import rpc as q_rpc
-from neutron.common import topics
 from neutron.common import utils
 from neutron import context as q_context
-from neutron.db import agents_db
 from neutron.db import agentschedulers_db
+from neutron.db import allowedaddresspairs_db as addr_pair_db
 from neutron.db import api as db
 from neutron.db import db_base_plugin_v2
-from neutron.db import dhcp_rpc_base
 from neutron.db import extraroute_db
 from neutron.db import l3_db
 from neutron.db import l3_gwmode_db
@@ -50,6 +45,7 @@ from neutron.db import portbindings_db
 from neutron.db import portsecurity_db
 from neutron.db import quota_db  # noqa
 from neutron.db import securitygroups_db
+from neutron.extensions import allowedaddresspairs as addr_pair
 from neutron.extensions import extraroute
 from neutron.extensions import l3
 from neutron.extensions import multiprovidernet as mpnet
@@ -58,17 +54,16 @@ from neutron.extensions import portsecurity as psec
 from neutron.extensions import providernet as pnet
 from neutron.extensions import securitygroup as ext_sg
 from neutron.openstack.common import excutils
-from neutron.openstack.common import importutils
-from neutron.openstack.common import rpc
-from neutron.plugins.nicira.common import config  # noqa
+from neutron.plugins.nicira.common import config
 from neutron.plugins.nicira.common import exceptions as nvp_exc
-from neutron.plugins.nicira.common import metadata_access as nvp_meta
 from neutron.plugins.nicira.common import securitygroups as nvp_sec
+from neutron.plugins.nicira.common import sync
 from neutron.plugins.nicira.dbexts import distributedrouter as dist_rtr
 from neutron.plugins.nicira.dbexts import maclearning as mac_db
 from neutron.plugins.nicira.dbexts import nicira_db
 from neutron.plugins.nicira.dbexts import nicira_networkgw_db as networkgw_db
 from neutron.plugins.nicira.dbexts import nicira_qos_db as qos_db
+from neutron.plugins.nicira import dhcpmeta_modes
 from neutron.plugins.nicira.extensions import maclearning as mac_ext
 from neutron.plugins.nicira.extensions import nvp_networkgw as networkgw
 from neutron.plugins.nicira.extensions import nvp_qos as ext_qos
@@ -117,34 +112,20 @@ def create_nvp_cluster(cluster_opts, concurrent_connections,
     return cluster
 
 
-class NVPRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin):
-
-    # Set RPC API version to 1.0 by default.
-    RPC_API_VERSION = '1.1'
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
-
-
-class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
+class NvpPluginV2(addr_pair_db.AllowedAddressPairsMixin,
+                  agentschedulers_db.DhcpAgentSchedulerDbMixin,
+                  db_base_plugin_v2.NeutronDbPluginV2,
+                  dhcpmeta_modes.DhcpMetadataAccess,
+                  dist_rtr.DistributedRouter_mixin,
                   extraroute_db.ExtraRoute_db_mixin,
                   l3_gwmode_db.L3_NAT_db_mixin,
-                  dist_rtr.DistributedRouter_mixin,
-                  portbindings_db.PortBindingMixin,
-                  portsecurity_db.PortSecurityDbMixin,
-                  securitygroups_db.SecurityGroupDbMixin,
                   mac_db.MacLearningDbMixin,
                   networkgw_db.NetworkGatewayMixin,
-                  qos_db.NVPQoSDbMixin,
                   nvp_sec.NVPSecurityGroups,
-                  nvp_meta.NvpMetadataAccess,
-                  agentschedulers_db.DhcpAgentSchedulerDbMixin):
+                  portbindings_db.PortBindingMixin,
+                  portsecurity_db.PortSecurityDbMixin,
+                  qos_db.NVPQoSDbMixin,
+                  securitygroups_db.SecurityGroupDbMixin):
     """L2 Virtual network plugin.
 
     NvpPluginV2 is a Neutron plugin that provides L2 Virtual Network
@@ -152,6 +133,7 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
     """
 
     supported_extension_aliases = ["agent",
+                                   "allowed-address-pairs",
                                    "binding",
                                    "dhcp_agent_scheduler",
                                    "dist-router",
@@ -202,6 +184,7 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         if not cfg.CONF.api_extensions_path:
             cfg.CONF.set_override('api_extensions_path', NVP_EXT_PATH)
         self.nvp_opts = cfg.CONF.NVP
+        self.nvp_sync_opts = cfg.CONF.NVP_SYNC
         self.cluster = create_nvp_cluster(cfg.CONF,
                                           self.nvp_opts.concurrent_connections,
                                           self.nvp_opts.nvp_gen_timeout)
@@ -213,16 +196,18 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                 'security-group' in self.supported_extension_aliases}}
 
         db.configure_db()
-        # Extend the fault map
         self._extend_fault_map()
-        # Set up RPC interface for DHCP agent
-        self.setup_rpc()
-        self.network_scheduler = importutils.import_object(
-            cfg.CONF.network_scheduler_driver
-        )
+        self.setup_dhcpmeta_access()
         # Set this flag to false as the default gateway has not
         # been yet updated from the config file
         self._is_default_net_gw_in_sync = False
+        # Create a synchronizer instance for backend sync
+        self._synchronizer = sync.NvpSynchronizer(
+            self, self.cluster,
+            self.nvp_sync_opts.state_sync_interval,
+            self.nvp_sync_opts.min_sync_req_delay,
+            self.nvp_sync_opts.min_chunk_size,
+            self.nvp_sync_opts.max_random_sync_delay)
 
     def _ensure_default_network_gateway(self):
         if self._is_default_net_gw_in_sync:
@@ -440,7 +425,8 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                                    port_data[psec.PORTSECURITY],
                                    port_data[ext_sg.SECURITYGROUPS],
                                    port_data[ext_qos.QUEUE],
-                                   port_data.get(mac_ext.MAC_LEARNING))
+                                   port_data.get(mac_ext.MAC_LEARNING),
+                                   port_data.get(addr_pair.ADDRESS_PAIRS))
 
     def _handle_create_port_exception(self, context, port_id,
                                       ls_uuid, lp_uuid):
@@ -525,7 +511,7 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                        'net_id': port_data['network_id']})
 
         except q_exc.NotFound:
-            LOG.warning(_("port %s not found in NVP"), port_data['id'])
+            LOG.warning(_("Port %s not found in NVP"), port_data['id'])
 
     def _nvp_delete_router_port(self, context, port_data):
         # Delete logical router port
@@ -888,18 +874,6 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                         "logical network %s"), network.id)
             raise nvp_exc.NvpNoMorePortsException(network=network.id)
 
-    def setup_rpc(self):
-        # RPC support for dhcp
-        self.topic = topics.PLUGIN
-        self.conn = rpc.create_connection(new=True)
-        self.dispatcher = NVPRpcCallbacks().create_rpc_dispatcher()
-        self.conn.create_consumer(self.topic, self.dispatcher,
-                                  fanout=False)
-        self.agent_notifiers[constants.AGENT_TYPE_DHCP] = (
-            dhcp_rpc_agent_api.DhcpAgentNotifyAPI())
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
-
     def _convert_to_nvp_transport_zones(self, cluster, network=None,
                                         bindings=None):
         nvp_transport_zones_config = []
@@ -1033,7 +1007,8 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                 self._extend_network_dict_provider(context, new_net,
                                                    provider_type,
                                                    net_bindings)
-        self.schedule_network(context, new_net)
+        self.handle_network_dhcp_access(context, new_net,
+                                        action='create_network')
         return new_net
 
     def delete_network(self, context, id):
@@ -1081,44 +1056,18 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                           context.tenant_id)
             except q_exc.NotFound:
                 LOG.warning(_("Did not found lswitch %s in NVP"), id)
+        self.handle_network_dhcp_access(context, id, action='delete_network')
 
     def get_network(self, context, id, fields=None):
         with context.session.begin(subtransactions=True):
             # goto to the plugin DB and fetch the network
             network = self._get_network(context, id)
-            # if the network is external, do not go to NVP
-            if not network.external:
-                # verify the fabric status of the corresponding
-                # logical switch(es) in nvp
-                try:
-                    lswitches = nvplib.get_lswitches(self.cluster, id)
-                    nvp_net_status = constants.NET_STATUS_ACTIVE
-                    neutron_status = network.status
-                    for lswitch in lswitches:
-                        relations = lswitch.get('_relations')
-                        if relations:
-                            lswitch_status = relations.get(
-                                'LogicalSwitchStatus')
-                            # FIXME(salvatore-orlando): Being unable to fetch
-                            # logical switch status should be an exception.
-                            if (lswitch_status and
-                                not lswitch_status.get('fabric_status',
-                                                       None)):
-                                nvp_net_status = constants.NET_STATUS_DOWN
-                                break
-                    LOG.debug(_("Current network status:%(nvp_net_status)s; "
-                                "Status in Neutron DB:%(neutron_status)s"),
-                              {'nvp_net_status': nvp_net_status,
-                               'neutron_status': neutron_status})
-                    if nvp_net_status != network.status:
-                        # update the network status
-                        network.status = nvp_net_status
-                except q_exc.NotFound:
-                    network.status = constants.NET_STATUS_ERROR
-                except Exception:
-                    err_msg = _("Unable to get logical switches")
-                    LOG.exception(err_msg)
-                    raise nvp_exc.NvpPluginException(err_msg=err_msg)
+            if fields and 'status' in fields:
+                # External networks are not backed by nvp lswitches
+                if not network.external:
+                    # Perform explicit state synchronization
+                    self._synchronizer.synchronize_network(
+                        context, network)
             # Don't do field selection here otherwise we won't be able
             # to add provider networks fields
             net_result = self._make_network_dict(network)
@@ -1127,85 +1076,13 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         return self._fields(net_result, fields)
 
     def get_networks(self, context, filters=None, fields=None):
-        nvp_lswitches = {}
         filters = filters or {}
         with context.session.begin(subtransactions=True):
-            neutron_lswitches = (
-                super(NvpPluginV2, self).get_networks(context, filters))
-            for net in neutron_lswitches:
+            networks = super(NvpPluginV2, self).get_networks(context, filters)
+            for net in networks:
                 self._extend_network_dict_provider(context, net)
                 self._extend_network_qos_queue(context, net)
-
-            tenant_ids = filters and filters.get('tenant_id') or None
-        filter_fmt = "&tag=%s&tag_scope=os_tid"
-        if context.is_admin and not tenant_ids:
-            tenant_filter = ""
-        else:
-            tenant_ids = tenant_ids or [context.tenant_id]
-            tenant_filter = ''.join(filter_fmt % tid for tid in tenant_ids)
-        lswitch_filters = "uuid,display_name,fabric_status,tags"
-        lswitch_url_path_1 = (
-            "/ws.v1/lswitch?fields=%s&relations=LogicalSwitchStatus%s"
-            % (lswitch_filters, tenant_filter))
-        lswitch_url_path_2 = nvplib._build_uri_path(
-            nvplib.LSWITCH_RESOURCE,
-            fields=lswitch_filters,
-            relations='LogicalSwitchStatus',
-            filters={'tag': 'true', 'tag_scope': 'shared'})
-        try:
-            res = nvplib.get_all_query_pages(lswitch_url_path_1, self.cluster)
-            nvp_lswitches.update(dict((ls['uuid'], ls) for ls in res))
-            # Issue a second query for fetching shared networks.
-            # We cannot unfortunately use just a single query because tags
-            # cannot be or-ed
-            res_shared = nvplib.get_all_query_pages(lswitch_url_path_2,
-                                                    self.cluster)
-            nvp_lswitches.update(dict((ls['uuid'], ls) for ls in res_shared))
-        except Exception:
-            err_msg = _("Unable to get logical switches")
-            LOG.exception(err_msg)
-            raise nvp_exc.NvpPluginException(err_msg=err_msg)
-
-        if filters.get('id'):
-            nvp_lswitches = dict(
-                (uuid, ls) for (uuid, ls) in nvp_lswitches.iteritems()
-                if uuid in set(filters['id']))
-        for neutron_lswitch in neutron_lswitches:
-            # Skip external networks as they do not exist in NVP
-            if neutron_lswitch[l3.EXTERNAL]:
-                continue
-            elif neutron_lswitch['id'] not in nvp_lswitches:
-                LOG.warning(_("Logical Switch %s found in neutron database "
-                              "but not in NVP."), neutron_lswitch["id"])
-                neutron_lswitch["status"] = constants.NET_STATUS_ERROR
-            else:
-                # TODO(salvatore-orlando): be careful about "extended"
-                # logical switches
-                ls = nvp_lswitches.pop(neutron_lswitch['id'])
-                if (ls["_relations"]["LogicalSwitchStatus"]["fabric_status"]):
-                    neutron_lswitch["status"] = constants.NET_STATUS_ACTIVE
-                else:
-                    neutron_lswitch["status"] = constants.NET_STATUS_DOWN
-
-        # do not make the case in which switches are found in NVP
-        # but not in Neutron catastrophic.
-        if nvp_lswitches:
-            LOG.warning(_("Found %s logical switches not bound "
-                        "to Neutron networks. Neutron and NVP are "
-                        "potentially out of sync"), len(nvp_lswitches))
-
-        LOG.debug(_("get_networks() completed for tenant %s"),
-                  context.tenant_id)
-
-        if fields:
-            ret_fields = []
-            for neutron_lswitch in neutron_lswitches:
-                row = {}
-                for field in fields:
-                    row[field] = neutron_lswitch[field]
-                ret_fields.append(row)
-            return ret_fields
-        return neutron_lswitches
+        return [self._fields(network, fields) for network in networks]
 
     def update_network(self, context, id, network):
         pnet._raise_if_updates_provider_attributes(network['network'])
@@ -1231,105 +1108,10 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
     def get_ports(self, context, filters=None, fields=None):
         filters = filters or {}
         with context.session.begin(subtransactions=True):
-            neutron_lports = super(NvpPluginV2, self).get_ports(
-                context, filters)
-        if (filters.get('network_id') and len(filters.get('network_id')) and
-            self._network_is_external(context, filters['network_id'][0])):
-            # Do not perform check on NVP platform
-            return neutron_lports
-
-        vm_filter = ""
-        tenant_filter = ""
-        # This is used when calling delete_network. Neutron checks to see if
-        # the network has any ports.
-        if filters.get("network_id"):
-            # FIXME (Aaron) If we get more than one network_id this won't work
-            lswitch = filters["network_id"][0]
-        else:
-            lswitch = "*"
-
-        if filters.get("device_id"):
-            for vm_id in filters.get("device_id"):
-                vm_filter = ("%stag_scope=vm_id&tag=%s&" % (vm_filter,
-                             hashlib.sha1(vm_id).hexdigest()))
-        else:
-            vm_id = ""
-
-        if filters.get("tenant_id"):
-            for tenant in filters.get("tenant_id"):
-                tenant_filter = ("%stag_scope=os_tid&tag=%s&" %
-                                 (tenant_filter, tenant))
-
-        nvp_lports = {}
-
-        lport_fields_str = ("tags,admin_status_enabled,display_name,"
-                            "fabric_status_up")
-        try:
-            lport_query_path = (
-                "/ws.v1/lswitch/%s/lport?fields=%s&%s%stag_scope=q_port_id"
-                "&relations=LogicalPortStatus" %
-                (lswitch, lport_fields_str, vm_filter, tenant_filter))
-
-            try:
-                ports = nvplib.get_all_query_pages(lport_query_path,
-                                                   self.cluster)
-            except q_exc.NotFound:
-                LOG.warn(_("Lswitch %s not found in NVP"), lswitch)
-                ports = None
-
-            if ports:
-                for port in ports:
-                    for tag in port["tags"]:
-                        if tag["scope"] == "q_port_id":
-                            nvp_lports[tag["tag"]] = port
-        except Exception:
-            err_msg = _("Unable to get ports")
-            LOG.exception(err_msg)
-            raise nvp_exc.NvpPluginException(err_msg=err_msg)
-
-        lports = []
-        for neutron_lport in neutron_lports:
-            # if a neutron port is not found in NVP, this migth be because
-            # such port is not mapped to a logical switch - ie: floating ip
-            if neutron_lport['device_owner'] in (l3_db.DEVICE_OWNER_FLOATINGIP,
-                                                 l3_db.DEVICE_OWNER_ROUTER_GW):
-                lports.append(neutron_lport)
-                continue
-            try:
-                neutron_lport["admin_state_up"] = (
-                    nvp_lports[neutron_lport["id"]]["admin_status_enabled"])
-
-                if (nvp_lports[neutron_lport["id"]]
-                        ["_relations"]
-                        ["LogicalPortStatus"]
-                        ["fabric_status_up"]):
-                    neutron_lport["status"] = constants.PORT_STATUS_ACTIVE
-                else:
-                    neutron_lport["status"] = constants.PORT_STATUS_DOWN
-
-                del nvp_lports[neutron_lport["id"]]
-            except KeyError:
-                neutron_lport["status"] = constants.PORT_STATUS_ERROR
-                LOG.debug(_("Neutron logical port %s was not found on NVP"),
-                          neutron_lport['id'])
-
-            lports.append(neutron_lport)
-        # do not make the case in which ports are found in NVP
-        # but not in Neutron catastrophic.
-        if nvp_lports:
-            LOG.warning(_("Found %s logical ports not bound "
-                          "to Neutron ports. Neutron and NVP are "
-                          "potentially out of sync"), len(nvp_lports))
-
-        if fields:
-            ret_fields = []
-            for lport in lports:
-                row = {}
-                for field in fields:
-                    row[field] = lport[field]
-                ret_fields.append(row)
-            return ret_fields
-        return lports
+            ports = super(NvpPluginV2, self).get_ports(context, filters)
+            for port in ports:
+                self._extend_port_qos_queue(context, port)
+        return [self._fields(port, fields) for port in ports]
 
     def create_port(self, context, port):
         # If PORTSECURITY is not the default value ATTR_NOT_SPECIFIED
@@ -1338,26 +1120,31 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         # ATTR_NOT_SPECIFIED is for the case where a port is created on a
         # shared network that is not owned by the tenant.
         port_data = port['port']
-        notify_dhcp_agent = False
         with context.session.begin(subtransactions=True):
             # First we allocate port in neutron database
             neutron_db = super(NvpPluginV2, self).create_port(context, port)
             neutron_port_id = neutron_db['id']
             # Update fields obtained from neutron db (eg: MAC address)
             port["port"].update(neutron_db)
-            # metadata_dhcp_host_route
-            if (cfg.CONF.NVP.metadata_mode == "dhcp_host_route" and
-                neutron_db.get('device_owner') == constants.DEVICE_OWNER_DHCP):
-                if (neutron_db.get('fixed_ips') and
-                    len(neutron_db['fixed_ips'])):
-                    notify_dhcp_agent = self._ensure_metadata_host_route(
-                        context, neutron_db['fixed_ips'][0])
+            self.handle_port_metadata_access(context, neutron_db)
             # port security extension checks
             (port_security, has_ip) = self._determine_port_security_and_has_ip(
                 context, port_data)
             port_data[psec.PORTSECURITY] = port_security
             self._process_port_port_security_create(
                 context, port_data, neutron_db)
+            # allowed address pair checks
+            if attr.is_attr_set(port_data.get(addr_pair.ADDRESS_PAIRS)):
+                if not port_security:
+                    raise addr_pair.AddressPairAndPortSecurityRequired()
+                else:
+                    self._process_create_allowed_address_pairs(
+                        context, neutron_db,
+                        port_data[addr_pair.ADDRESS_PAIRS])
+            else:
+                # remove ATTR_NOT_SPECIFIED
+                port_data[addr_pair.ADDRESS_PAIRS] = None
+
             # security group extension checks
             if port_security and has_ip:
                 self._ensure_default_security_group_on_port(context, port)
@@ -1408,19 +1195,16 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                 with context.session.begin(subtransactions=True):
                     self._delete_port(context, neutron_port_id)
 
-        # Port has been created both on DB and NVP - proceed with
-        # scheduling network and notifying DHCP agent
-        net = self.get_network(context, port_data['network_id'])
-        self.schedule_network(context, net)
-        if notify_dhcp_agent:
-            self._send_subnet_update_end(
-                context, neutron_db['fixed_ips'][0]['subnet_id'])
+        self.handle_port_dhcp_access(context, port_data, action='create_port')
         return port_data
 
     def update_port(self, context, id, port):
         delete_security_groups = self._check_update_deletes_security_groups(
             port)
         has_security_groups = self._check_update_has_security_groups(port)
+        delete_addr_pairs = self._check_update_deletes_allowed_address_pairs(
+            port)
+        has_addr_pairs = self._check_update_has_allowed_address_pairs(port)
 
         with context.session.begin(subtransactions=True):
             ret_port = super(NvpPluginV2, self).update_port(
@@ -1434,7 +1218,28 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             ret_port.update(port['port'])
             tenant_id = self._get_tenant_id_for_create(context, ret_port)
 
+            # populate port_security setting
+            if psec.PORTSECURITY not in port['port']:
+                ret_port[psec.PORTSECURITY] = self._get_port_security_binding(
+                    context, id)
             has_ip = self._ip_on_port(ret_port)
+            # validate port security and allowed address pairs
+            if not ret_port[psec.PORTSECURITY]:
+                #  has address pairs in request
+                if has_addr_pairs:
+                    raise addr_pair.AddressPairAndPortSecurityRequired()
+                elif not delete_addr_pairs:
+                    # check if address pairs are in db
+                    ret_port[addr_pair.ADDRESS_PAIRS] = (
+                        self.get_allowed_address_pairs(context, id))
+                    if ret_port[addr_pair.ADDRESS_PAIRS]:
+                        raise addr_pair.AddressPairAndPortSecurityRequired()
+
+            if (delete_addr_pairs or has_addr_pairs):
+                # delete address pairs and read them in
+                self._delete_allowed_address_pairs(context, id)
+                self._process_create_allowed_address_pairs(
+                    context, ret_port, ret_port[addr_pair.ADDRESS_PAIRS])
             # checks if security groups were updated adding/modifying
             # security groups, port security is set and port has ip
             if not (has_ip and ret_port[psec.PORTSECURITY]):
@@ -1487,7 +1292,8 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                                        ret_port[psec.PORTSECURITY],
                                        ret_port[ext_sg.SECURITYGROUPS],
                                        ret_port[ext_qos.QUEUE],
-                                       ret_port.get(mac_ext.MAC_LEARNING))
+                                       ret_port.get(mac_ext.MAC_LEARNING),
+                                       ret_port.get(addr_pair.ADDRESS_PAIRS))
 
                     # Update the port status from nvp. If we fail here hide it
                     # since the port was successfully updated but we were not
@@ -1540,63 +1346,40 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
 
         port_delete_func(context, neutron_db_port)
         self.disassociate_floatingips(context, id)
-        notify_dhcp_agent = False
         with context.session.begin(subtransactions=True):
             queue = self._get_port_queue_bindings(context, {'port_id': [id]})
             # metadata_dhcp_host_route
-            port_device_owner = neutron_db_port['device_owner']
-            if (cfg.CONF.NVP.metadata_mode == "dhcp_host_route" and
-                port_device_owner == constants.DEVICE_OWNER_DHCP):
-                    notify_dhcp_agent = self._ensure_metadata_host_route(
-                        context, neutron_db_port['fixed_ips'][0],
-                        is_delete=True)
+            self.handle_port_metadata_access(
+                context, neutron_db_port, is_delete=True)
             super(NvpPluginV2, self).delete_port(context, id)
             # Delete qos queue if possible
             if queue:
                 self.delete_qos_queue(context, queue[0]['queue_id'], False)
-        if notify_dhcp_agent:
-            self._send_subnet_update_end(
-                context, neutron_db_port['fixed_ips'][0]['subnet_id'])
+        self.handle_port_dhcp_access(
+            context, neutron_db_port, action='delete_port')
 
     def get_port(self, context, id, fields=None):
         with context.session.begin(subtransactions=True):
-            neutron_db_port = super(NvpPluginV2, self).get_port(context,
-                                                                id, fields)
-            self._extend_port_qos_queue(context, neutron_db_port)
-
-            if self._network_is_external(context,
-                                         neutron_db_port['network_id']):
-                return neutron_db_port
-            nvp_id = self._nvp_get_port_id(context, self.cluster,
-                                           neutron_db_port)
-            # If there's no nvp IP do not bother going to NVP and put
-            # the port in error state
-            if nvp_id:
-                    # Find the NVP port corresponding to neutron port_id
-                    # Do not query by nvp id as the port might be on
-                    # an extended switch and we do not store the extended
-                    # switch uuid
-                    results = nvplib.query_lswitch_lports(
-                        self.cluster, '*',
-                        relations='LogicalPortStatus',
-                        filters={'tag': id, 'tag_scope': 'q_port_id'})
-                    if results:
-                        port = results[0]
-                        port_status = port["_relations"]["LogicalPortStatus"]
-                        neutron_db_port["admin_state_up"] = (
-                            port["admin_status_enabled"])
-                        if port_status["fabric_status_up"]:
-                            neutron_db_port["status"] = (
-                                constants.PORT_STATUS_ACTIVE)
-                        else:
-                            neutron_db_port["status"] = (
-                                constants.PORT_STATUS_DOWN)
-                    else:
-                        neutron_db_port["status"] = (
-                            constants.PORT_STATUS_ERROR)
+            if fields and 'status' in fields:
+                # Perform explicit state synchronization
+                db_port = self._get_port(context, id)
+                self._synchronizer.synchronize_port(
+                    context, db_port)
+                port = self._make_port_dict(db_port, fields)
             else:
-                neutron_db_port["status"] = constants.PORT_STATUS_ERROR
-        return neutron_db_port
+                port = super(NvpPluginV2, self).get_port(context, id, fields)
+            self._extend_port_qos_queue(context, port)
+        return port
+
+    def get_router(self, context, id, fields=None):
+        if fields and 'status' in fields:
+            db_router = self._get_router(context, id)
+            # Perform explicit state synchronization
+            self._synchronizer.synchronize_router(
+                context, db_router)
+            return self._make_router_dict(db_router, fields)
+        else:
+            return super(NvpPluginV2, self).get_router(context, id, fields)
 
     def create_router(self, context, router):
         # NOTE(salvatore-orlando): We completely override this method in
@@ -1655,9 +1438,9 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                 "L3GatewayAttachment",
                 self.cluster.default_l3_gw_service_uuid)
         except nvp_exc.NvpPluginException:
-            LOG.exception(_("Unable to create L3GW port on logical router  "
+            LOG.exception(_("Unable to create L3GW port on logical router "
                             "%(router_uuid)s. Verify Default Layer-3 Gateway "
-                            "service %(def_l3_gw_svc)s id is correct") %
+                            "service %(def_l3_gw_svc)s id is correct"),
                           {'router_uuid': lrouter['uuid'],
                            'def_l3_gw_svc':
                            self.cluster.default_l3_gw_service_uuid})
@@ -1744,14 +1527,15 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                 nvplib.update_explicit_routes_lrouter(
                     self.cluster, router_id, previous_routes)
 
-    def delete_router(self, context, id):
+    def delete_router(self, context, router_id):
         with context.session.begin(subtransactions=True):
             # Ensure metadata access network is detached and destroyed
             # This will also destroy relevant objects on NVP platform.
             # NOTE(salvatore-orlando): A failure in this operation will
             # cause the router delete operation to fail too.
-            self._handle_metadata_access_network(context, id, do_create=False)
-            super(NvpPluginV2, self).delete_router(context, id)
+            self.handle_router_metadata_access(
+                context, router_id, do_create=False)
+            super(NvpPluginV2, self).delete_router(context, router_id)
             # If removal is successful in Neutron it should be so on
             # the NVP platform too - otherwise the transaction should
             # be automatically aborted
@@ -1759,85 +1543,14 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             # allow an extra field for storing the cluster information
             # together with the resource
             try:
-                nvplib.delete_lrouter(self.cluster, id)
+                nvplib.delete_lrouter(self.cluster, router_id)
             except q_exc.NotFound:
                 LOG.warning(_("Logical router '%s' not found "
-                              "on NVP Platform") % id)
+                              "on NVP Platform"), router_id)
             except NvpApiClient.NvpApiException:
                 raise nvp_exc.NvpPluginException(
-                    err_msg=(_("Unable to delete logical router"
-                               "on NVP Platform")))
-
-    def get_router(self, context, id, fields=None):
-        router = self._get_router(context, id)
-        try:
-            lrouter = nvplib.get_lrouter(self.cluster, id)
-            relations = lrouter.get('_relations')
-            if relations:
-                lrouter_status = relations.get('LogicalRouterStatus')
-                # FIXME(salvatore-orlando): Being unable to fetch the
-                # logical router status should be an exception.
-                if lrouter_status:
-                    router_op_status = (lrouter_status.get('fabric_status')
-                                        and constants.NET_STATUS_ACTIVE or
-                                        constants.NET_STATUS_DOWN)
-        except q_exc.NotFound:
-            lrouter = {}
-            router_op_status = constants.NET_STATUS_ERROR
-        if router_op_status != router.status:
-            LOG.debug(_("Current router status:%(router_status)s;"
-                        "Status in Neutron DB:%(db_router_status)s"),
-                      {'router_status': router_op_status,
-                       'db_router_status': router.status})
-            # update the router status
-            with context.session.begin(subtransactions=True):
-                router.status = router_op_status
-        return self._make_router_dict(router, fields)
-
-    def get_routers(self, context, filters=None, fields=None):
-        router_query = self._apply_filters_to_query(
-            self._model_query(context, l3_db.Router),
-            l3_db.Router, filters)
-        routers = router_query.all()
-        # Query routers on NVP for updating operational status
-        if context.is_admin and not filters.get("tenant_id"):
-            tenant_id = None
-        elif 'tenant_id' in filters:
-            tenant_id = filters.get('tenant_id')[0]
-            del filters['tenant_id']
-        else:
-            tenant_id = context.tenant_id
-        try:
-            nvp_lrouters = nvplib.get_lrouters(self.cluster,
-                                               tenant_id,
-                                               fields)
-        except NvpApiClient.NvpApiException:
-            err_msg = _("Unable to get logical routers from NVP controller")
-            LOG.exception(err_msg)
-            raise nvp_exc.NvpPluginException(err_msg=err_msg)
-
-        nvp_lrouters_dict = {}
-        for nvp_lrouter in nvp_lrouters:
-            nvp_lrouters_dict[nvp_lrouter['uuid']] = nvp_lrouter
-        for router in routers:
-            nvp_lrouter = nvp_lrouters_dict.get(router['id'])
-            if nvp_lrouter:
-                if (nvp_lrouter["_relations"]["LogicalRouterStatus"]
-                        ["fabric_status"]):
-                    router.status = constants.NET_STATUS_ACTIVE
-                else:
-                    router.status = constants.NET_STATUS_DOWN
-                nvp_lrouters.remove(nvp_lrouter)
-            else:
-                router.status = constants.NET_STATUS_ERROR
-
-        # do not make the case in which routers are found in NVP
-        # but not in Neutron catastrophic.
-        if nvp_lrouters:
-            LOG.warning(_("Found %s logical routers not bound "
-                          "to Neutron routers. Neutron and NVP are "
-                          "potentially out of sync"), len(nvp_lrouters))
-        return [self._make_router_dict(router, fields) for router in routers]
+                    err_msg=(_("Unable to delete logical router '%s' "
+                               "on NVP Platform") % router_id))
 
     def add_router_interface(self, context, router_id, interface_info):
         # When adding interface by port_id we need to create the
@@ -1892,7 +1605,7 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         # Ensure the NVP logical router has a connection to a 'metadata access'
         # network (with a proxy listening on its DHCP port), by creating it
         # if needed.
-        self._handle_metadata_access_network(context, router_id)
+        self.handle_router_metadata_access(context, router_id)
         LOG.debug(_("Add_router_interface completed for subnet:%(subnet_id)s "
                     "and router:%(router_id)s"),
                   {'subnet_id': subnet_id, 'router_id': router_id})
@@ -1936,7 +1649,7 @@ class NvpPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         # Ensure the connection to the 'metadata access network'
         # is removed  (with the network) if this the last subnet
         # on the router
-        self._handle_metadata_access_network(context, router_id)
+        self.handle_router_metadata_access(context, router_id)
         try:
             if not subnet:
                 subnet = self._get_subnet(context, subnet_id)

@@ -289,15 +289,15 @@ def add_network_binding(db_session, network_id, network_type,
 
     :param db_session: database session
     :param network_id: UUID representing the network
-    :param network_type: string representing type of network (VLAN, VXLAN,
+    :param network_type: string representing type of network (VLAN, OVERLAY,
                          MULTI_SEGMENT or TRUNK)
     :param physical_network: Only applicable for VLAN networks. It
                              represents a L2 Domain
     :param segmentation_id: integer representing VLAN or VXLAN ID
-    :param multicast_ip: VXLAN technology needs a multicast IP to be associated
-                         with every VXLAN ID to deal with broadcast packets. A
-                         single multicast IP can be shared by multiple VXLAN
-                         IDs.
+    :param multicast_ip: Native VXLAN technology needs a multicast IP to be
+                         associated with every VXLAN ID to deal with broadcast
+                         packets. A single multicast IP can be shared by
+                         multiple VXLAN IDs.
     :param network_profile_id: network profile ID based on which this network
                                is created
     :param add_segments: List of segment UUIDs in pairs to be added to either a
@@ -516,7 +516,7 @@ def reserve_vxlan(db_session, network_profile):
     :param network_profile: network profile object
     """
     seg_min, seg_max = get_segment_range(network_profile)
-    segment_type = c_const.NETWORK_TYPE_VXLAN
+    segment_type = c_const.NETWORK_TYPE_OVERLAY
     physical_network = ""
 
     with db_session.begin(subtransactions=True):
@@ -531,10 +531,13 @@ def reserve_vxlan(db_session, network_profile):
         if alloc:
             segment_id = alloc.vxlan_id
             alloc.allocated = True
-            return (physical_network, segment_type,
-                    segment_id, get_multicast_ip(network_profile))
-        raise c_exc.NoMoreNetworkSegments(
-            network_profile_name=network_profile.name)
+            if network_profile.sub_type == (c_const.
+                                            NETWORK_SUBTYPE_NATIVE_VXLAN):
+                return (physical_network, segment_type,
+                        segment_id, get_multicast_ip(network_profile))
+            else:
+                return (physical_network, segment_type, segment_id, "0.0.0.0")
+        raise q_exc.NoNetworkAvailable()
 
 
 def alloc_network(db_session, network_profile_id):
@@ -549,7 +552,7 @@ def alloc_network(db_session, network_profile_id):
                                               network_profile_id)
         if network_profile.segment_type == c_const.NETWORK_TYPE_VLAN:
             return reserve_vlan(db_session, network_profile)
-        if network_profile.segment_type == c_const.NETWORK_TYPE_VXLAN:
+        if network_profile.segment_type == c_const.NETWORK_TYPE_OVERLAY:
             return reserve_vxlan(db_session, network_profile)
         return (None, network_profile.segment_type, 0, "0.0.0.0")
 
@@ -664,7 +667,7 @@ def delete_vxlan_allocations(db_session, vxlan_id_ranges):
                   filter_by(allocated=False))
         for alloc in allocs:
             if alloc.vxlan_id in vxlan_ids:
-                LOG.debug(_("Removing vxlan %s from pool") %
+                LOG.debug(_("Removing vxlan %s from pool"),
                           alloc.vxlan_id)
                 db_session.delete(alloc)
 
@@ -695,9 +698,9 @@ def reserve_specific_vxlan(db_session, vxlan_id):
                      one())
             if alloc.allocated:
                 raise c_exc.VxlanIdInUse(vxlan_id=vxlan_id)
-            LOG.debug(_("Reserving specific vxlan %s from pool") % vxlan_id)
+            LOG.debug(_("Reserving specific vxlan %s from pool"), vxlan_id)
         except exc.NoResultFound:
-            LOG.debug(_("Reserving specific vxlan %s outside pool") % vxlan_id)
+            LOG.debug(_("Reserving specific vxlan %s outside pool"), vxlan_id)
             alloc = n1kv_models_v2.N1kvVxlanAllocation(vxlan_id=vxlan_id)
             db_session.add(alloc)
         alloc.allocated = True
@@ -841,7 +844,7 @@ def create_network_profile(db_session, network_profile):
         if network_profile["segment_type"] == c_const.NETWORK_TYPE_VLAN:
             kwargs["physical_network"] = network_profile["physical_network"]
             kwargs["segment_range"] = network_profile["segment_range"]
-        elif network_profile["segment_type"] == c_const.NETWORK_TYPE_VXLAN:
+        elif network_profile["segment_type"] == c_const.NETWORK_TYPE_OVERLAY:
             kwargs["multicast_ip_index"] = 0
             kwargs["multicast_ip_range"] = network_profile[
                 "multicast_ip_range"]
@@ -883,7 +886,7 @@ def get_network_profile(db_session, id):
         return db_session.query(
             n1kv_models_v2.NetworkProfile).filter_by(id=id).one()
     except exc.NoResultFound:
-        raise c_exc.NetworkProfileIdNotFound(profile_id=id)
+        raise c_exc.NetworkProfileNotFound(profile=id)
 
 
 def _get_network_profiles(**kwargs):
@@ -943,7 +946,7 @@ def get_policy_profile(db_session, id):
 def create_profile_binding(tenant_id, profile_id, profile_type):
     """Create Network/Policy Profile association with a tenant."""
     if profile_type not in ["network", "policy"]:
-        raise q_exc.NeutronException("Invalid profile type")
+        raise q_exc.NeutronException(_("Invalid profile type"))
 
     if _profile_binding_exists(tenant_id, profile_id, profile_type):
         return get_profile_binding(tenant_id, profile_id)
@@ -991,7 +994,7 @@ def delete_profile_binding(tenant_id, profile_id):
             db_session.delete(binding)
     except c_exc.ProfileTenantBindingNotFound:
         LOG.debug(_("Profile-Tenant binding missing for profile ID "
-                  "%(profile_id)s and tenant ID %(tenant_id)") %
+                    "%(profile_id)s and tenant ID %(tenant_id)s"),
                   {"profile_id": profile_id, "tenant_id": tenant_id})
         return
 
@@ -1194,7 +1197,7 @@ class NetworkProfile_db_mixin(object):
         try:
             get_network_profile(context.session, id)
             return True
-        except c_exc.NetworkProfileIdNotFound(profile_id=id):
+        except c_exc.NetworkProfileNotFound(profile=id):
             return False
 
     def _get_segment_range(self, data):
@@ -1218,7 +1221,7 @@ class NetworkProfile_db_mixin(object):
         :param network_profile: network profile object
         """
         if not re.match(r"(\d+)\-(\d+)", network_profile["segment_range"]):
-            msg = _("invalid segment range. example range: 500-550")
+            msg = _("Invalid segment range. example range: 500-550")
             raise q_exc.InvalidInput(error_message=msg)
 
     def _validate_network_profile(self, net_p):
@@ -1228,41 +1231,45 @@ class NetworkProfile_db_mixin(object):
         :param net_p: network profile object
         """
         if any(net_p[arg] == "" for arg in ["segment_type"]):
-            msg = _("arguments segment_type missing"
+            msg = _("Arguments segment_type missing"
                     " for network profile")
             LOG.exception(msg)
             raise q_exc.InvalidInput(error_message=msg)
         segment_type = net_p["segment_type"].lower()
         if segment_type not in [c_const.NETWORK_TYPE_VLAN,
-                                c_const.NETWORK_TYPE_VXLAN,
+                                c_const.NETWORK_TYPE_OVERLAY,
                                 c_const.NETWORK_TYPE_TRUNK,
                                 c_const.NETWORK_TYPE_MULTI_SEGMENT]:
-            msg = _("segment_type should either be vlan, vxlan, "
+            msg = _("segment_type should either be vlan, overlay, "
                     "multi-segment or trunk")
             LOG.exception(msg)
             raise q_exc.InvalidInput(error_message=msg)
         if segment_type == c_const.NETWORK_TYPE_VLAN:
             if "physical_network" not in net_p:
-                msg = _("argument physical_network missing "
+                msg = _("Argument physical_network missing "
                         "for network profile")
                 LOG.exception(msg)
                 raise q_exc.InvalidInput(error_message=msg)
-        if segment_type == c_const.NETWORK_TYPE_TRUNK:
+        if segment_type in [c_const.NETWORK_TYPE_TRUNK,
+                            c_const.NETWORK_TYPE_OVERLAY]:
             if "sub_type" not in net_p:
-                msg = _("argument sub_type missing "
-                        "for trunk network profile")
+                msg = _("Argument sub_type missing "
+                        "for network profile")
                 LOG.exception(msg)
                 raise q_exc.InvalidInput(error_message=msg)
         if segment_type in [c_const.NETWORK_TYPE_VLAN,
-                            c_const.NETWORK_TYPE_VXLAN]:
+                            c_const.NETWORK_TYPE_OVERLAY]:
             if "segment_range" not in net_p:
-                msg = _("argument segment_range missing "
+                msg = _("Argument segment_range missing "
                         "for network profile")
                 LOG.exception(msg)
                 raise q_exc.InvalidInput(error_message=msg)
             self._validate_segment_range(net_p)
-        if segment_type != c_const.NETWORK_TYPE_VXLAN:
-            net_p["multicast_ip_range"] = "0.0.0.0"
+        if segment_type == c_const.NETWORK_TYPE_OVERLAY:
+            if net_p['sub_type'] != c_const.NETWORK_SUBTYPE_NATIVE_VXLAN:
+                net_p['multicast_ip_range'] = '0.0.0.0'
+        else:
+            net_p['multicast_ip_range'] = '0.0.0.0'
 
     def _validate_segment_range_uniqueness(self, context, net_p):
         """
@@ -1299,9 +1306,24 @@ class NetworkProfile_db_mixin(object):
                     (profile_seg_min <= seg_max <= profile_seg_max) or
                     ((seg_min <= profile_seg_min) and
                      (seg_max >= profile_seg_max))):
-                    msg = _("segment range overlaps with another profile")
+                    msg = _("Segment range overlaps with another profile")
                     LOG.exception(msg)
                     raise q_exc.InvalidInput(error_message=msg)
+
+    def _get_network_profile_by_name(self, db_session, name):
+        """
+        Retrieve network profile based on name.
+
+        :param db_session: database session
+        :param name: string representing the name for the network profile
+        :returns: network profile object
+        """
+        with db_session.begin(subtransactions=True):
+            try:
+                return (db_session.query(n1kv_models_v2.NetworkProfile).
+                        filter_by(name=name).one())
+            except exc.NoResultFound:
+                raise c_exc.NetworkProfileNotFound(profile=name)
 
 
 class PolicyProfile_db_mixin(object):
@@ -1453,7 +1475,7 @@ class PolicyProfile_db_mixin(object):
         db_session = db.get_session()
         with db_session.begin(subtransactions=True):
             return (db_session.query(n1kv_models_v2.PolicyProfile).
-                    filter_by(name=name).first())
+                    filter_by(name=name).one())
 
     def _remove_all_fake_policy_profiles(self):
         """

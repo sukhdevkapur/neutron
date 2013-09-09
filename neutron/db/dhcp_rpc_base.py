@@ -19,6 +19,7 @@ from sqlalchemy.orm import exc
 from neutron.api.v2 import attributes
 from neutron.common import constants
 from neutron.common import utils
+from neutron.extensions import portbindings
 from neutron import manager
 from neutron.openstack.common import log as logging
 
@@ -215,7 +216,7 @@ class DhcpRpcCallbackMixin(object):
         host = kwargs.get('host')
 
         LOG.warning(_('Updating lease expiration is now deprecated. Issued  '
-                      'from host %(host)s.') % host)
+                      'from host %s.'), host)
 
     def create_dhcp_port(self, context, **kwargs):
         """Create the dhcp port."""
@@ -227,6 +228,7 @@ class DhcpRpcCallbackMixin(object):
                    'host': host})
 
         port['port']['device_owner'] = constants.DEVICE_OWNER_DHCP
+        port['port'][portbindings.HOST_ID] = host
         if 'mac_address' not in port['port']:
             port['port']['mac_address'] = attributes.ATTR_NOT_SPECIFIED
         plugin = manager.NeutronManager.get_plugin()

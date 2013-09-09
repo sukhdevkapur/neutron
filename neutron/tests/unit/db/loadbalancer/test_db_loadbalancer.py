@@ -28,12 +28,14 @@ from neutron.common import config
 from neutron import context
 import neutron.db.l3_db  # noqa
 from neutron.db.loadbalancer import loadbalancer_db as ldb
+from neutron.db import servicetype_db as sdb
 import neutron.extensions
 from neutron.extensions import loadbalancer
 from neutron.plugins.common import constants
 from neutron.services.loadbalancer import (
     plugin as loadbalancer_plugin
 )
+from neutron.services import provider_configuration as pconf
 from neutron.tests.unit import test_db_plugin
 
 
@@ -90,10 +92,9 @@ class LoadBalancerTestMixin(object):
                          'protocol': protocol,
                          'admin_state_up': admin_state_up,
                          'tenant_id': self._tenant_id}}
-        for arg in ('description'):
+        for arg in ('description', 'provider'):
             if arg in kwargs and kwargs[arg] is not None:
                 data['pool'][arg] = kwargs[arg]
-
         pool_req = self.new_create_request('pools', data, fmt)
         pool_res = pool_req.get_response(self.ext_api)
         if expected_res_status:
@@ -254,8 +255,19 @@ class LoadBalancerTestMixin(object):
 
 class LoadBalancerPluginDbTestCase(LoadBalancerTestMixin,
                                    test_db_plugin.NeutronDbPluginV2TestCase):
-    def setUp(self, core_plugin=None, lb_plugin=None):
+    def setUp(self, core_plugin=None, lb_plugin=None, lbaas_provider=None):
         service_plugins = {'lb_plugin_name': DB_LB_PLUGIN_KLASS}
+        if not lbaas_provider:
+            lbaas_provider = (
+                constants.LOADBALANCER +
+                ':lbaas:neutron.services.loadbalancer.'
+                'drivers.noop.noop_driver.NoopLbaaSDriver:default')
+        cfg.CONF.set_override('service_provider',
+                              [lbaas_provider],
+                              'service_providers')
+        #force service type manager to reload configuration:
+        sdb.ServiceTypeManager._instance = None
+
         super(LoadBalancerPluginDbTestCase, self).setUp(
             service_plugins=service_plugins
         )
@@ -271,6 +283,7 @@ class LoadBalancerPluginDbTestCase(LoadBalancerTestMixin,
         get_lbaas_agent_patcher.start().return_value = mock_lbaas_agent
         mock_lbaas_agent.__getitem__.return_value = {'host': 'host'}
         self.addCleanup(mock.patch.stopall)
+        self.addCleanup(cfg.CONF.reset)
 
         ext_mgr = PluginAwareExtensionManager(
             extensions_path,
@@ -282,10 +295,6 @@ class LoadBalancerPluginDbTestCase(LoadBalancerTestMixin,
 
 class TestLoadBalancer(LoadBalancerPluginDbTestCase):
     def setUp(self):
-        cfg.CONF.set_override('driver_fqn',
-                              'neutron.services.loadbalancer.drivers.noop'
-                              '.noop_driver.NoopLbaaSDriver',
-                              group='LBAAS')
         self.addCleanup(cfg.CONF.reset)
         super(TestLoadBalancer, self).setUp()
 
@@ -565,6 +574,48 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
 
         pool = self.pool(name=name, lb_method='UNSUPPORTED')
         self.assertRaises(webob.exc.HTTPClientError, pool.__enter__)
+
+    def _create_pool_directly_via_plugin(self, provider_name):
+        #default provider will be haproxy
+        prov1 = (constants.LOADBALANCER +
+                 ':lbaas:neutron.services.loadbalancer.'
+                 'drivers.noop.noop_driver.NoopLbaaSDriver')
+        prov2 = (constants.LOADBALANCER +
+                 ':haproxy:neutron.services.loadbalancer.'
+                 'drivers.haproxy.plugin_driver.HaproxyOnHostPluginDriver'
+                 ':default')
+        cfg.CONF.set_override('service_provider',
+                              [prov1, prov2],
+                              'service_providers')
+        sdb.ServiceTypeManager._instance = None
+        self.plugin = loadbalancer_plugin.LoadBalancerPlugin()
+        with self.subnet() as subnet:
+            ctx = context.get_admin_context()
+            #create pool with another provider - lbaas
+            #which is noop driver
+            pool = {'name': 'pool1',
+                    'subnet_id': subnet['subnet']['id'],
+                    'lb_method': 'ROUND_ROBIN',
+                    'protocol': 'HTTP',
+                    'admin_state_up': True,
+                    'tenant_id': self._tenant_id,
+                    'provider': provider_name,
+                    'description': ''}
+            self.plugin.create_pool(ctx, {'pool': pool})
+            assoc = ctx.session.query(sdb.ProviderResourceAssociation).one()
+            self.assertEqual(assoc.provider_name,
+                             pconf.normalize_provider_name(provider_name))
+
+    def test_create_pool_another_provider(self):
+        self._create_pool_directly_via_plugin('lbaas')
+
+    def test_create_pool_unnormalized_provider_name(self):
+        self._create_pool_directly_via_plugin('LBAAS')
+
+    def test_create_pool_unexisting_provider(self):
+        self.assertRaises(
+            pconf.ServiceProviderNotFound,
+            self._create_pool_directly_via_plugin, 'unexisting')
 
     def test_create_pool(self):
         name = "pool1"
@@ -1058,6 +1109,16 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
                                   res['pool']['health_monitors'])
                     self.assertIn(monitor2['health_monitor']['id'],
                                   res['pool']['health_monitors'])
+                    expected = [
+                        {'monitor_id': monitor1['health_monitor']['id'],
+                         'status': 'PENDING_CREATE',
+                         'status_description': None},
+                        {'monitor_id': monitor2['health_monitor']['id'],
+                         'status': 'PENDING_CREATE',
+                         'status_description': None}]
+                    self.assertEqual(
+                        sorted(expected),
+                        sorted(res['pool']['health_monitors_status']))
 
     def test_delete_healthmonitor_of_pool(self):
         with self.health_monitor(type="TCP") as monitor1:
@@ -1110,6 +1171,13 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
                                      res['pool']['health_monitors'])
                     self.assertIn(monitor2['health_monitor']['id'],
                                   res['pool']['health_monitors'])
+                    expected = [
+                        {'monitor_id': monitor2['health_monitor']['id'],
+                         'status': 'PENDING_CREATE',
+                         'status_description': None}
+                    ]
+                    self.assertEqual(expected,
+                                     res['pool']['health_monitors_status'])
 
     def test_create_loadbalancer(self):
         vip_name = "vip3"
@@ -1170,6 +1238,13 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
                               pool_updated['pool']['members'])
                 self.assertIn(health_monitor['health_monitor']['id'],
                               pool_updated['pool']['health_monitors'])
+                expected = [
+                    {'monitor_id': health_monitor['health_monitor']['id'],
+                     'status': 'PENDING_CREATE',
+                     'status_description': None}
+                ]
+                self.assertEqual(
+                    expected, pool_updated['pool']['health_monitors_status'])
 
                 req = self.new_show_request('vips',
                                             vip_id,
@@ -1210,8 +1285,14 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
                                    health_mon2['health_monitor']['id']]},
                                  res)
 
+                res = self.plugin.get_pool_health_monitor(
+                    context.get_admin_context(),
+                    health_mon2['health_monitor']['id'], pool['pool']['id'])
+                self.assertEqual(res['tenant_id'],
+                                 health_mon1['health_monitor']['tenant_id'])
+
     def test_driver_call_create_pool_health_monitor(self):
-        with mock.patch.object(self.plugin.driver,
+        with mock.patch.object(self.plugin.drivers['lbaas'],
                                'create_pool_health_monitor') as driver_call:
             with contextlib.nested(
                 self.pool(),
@@ -1341,6 +1422,30 @@ class TestLoadBalancer(LoadBalancerPluginDbTestCase):
                     pool['pool']['id'])
                 self.assertEqual(assoc['status'], 'ACTIVE')
                 self.assertEqual(assoc['status_description'], 'ok')
+
+    def test_check_orphan_pool_associations(self):
+        with contextlib.nested(
+            #creating pools with default noop driver
+            self.pool(),
+            self.pool()
+        ) as (p1, p2):
+            #checking that 3 associations exist
+            ctx = context.get_admin_context()
+            qry = ctx.session.query(sdb.ProviderResourceAssociation)
+            self.assertEqual(qry.count(), 2)
+            #removing driver
+            cfg.CONF.set_override('service_provider',
+                                  [constants.LOADBALANCER +
+                                   ':lbaas1:neutron.services.loadbalancer.'
+                                   'drivers.noop.noop_driver.'
+                                   'NoopLbaaSDriver:default'],
+                                  'service_providers')
+            sdb.ServiceTypeManager._instance = None
+            # calling _remove_orphan... in constructor
+            self.assertRaises(
+                SystemExit,
+                loadbalancer_plugin.LoadBalancerPlugin
+            )
 
 
 class TestLoadBalancerXML(TestLoadBalancer):

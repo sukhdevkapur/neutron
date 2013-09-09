@@ -66,7 +66,10 @@ SNAT_KEYS = ["to_src_port_min", "to_src_port_max", "to_src_ip_min",
              "to_src_ip_max"]
 
 DNAT_KEYS = ["to_dst_port", "to_dst_ip_min", "to_dst_ip_max"]
-
+# Maximum page size for a single request
+# NOTE(salv-orlando): This might become a version-dependent map should the
+# limit be raised in future versions
+MAX_PAGE_SIZE = 5000
 
 # TODO(bgh): it would be more efficient to use a bitmap
 taken_context_ids = []
@@ -136,7 +139,7 @@ def _check_and_truncate_name(display_name):
         LOG.debug(_("Specified name:'%s' exceeds maximum length. "
                     "It will be truncated on NVP"), display_name)
         return display_name[:MAX_DISPLAY_NAME_LEN]
-    return display_name
+    return display_name or ''
 
 
 def get_cluster_version(cluster):
@@ -157,21 +160,34 @@ def get_cluster_version(cluster):
     return version
 
 
+def get_single_query_page(path, cluster, page_cursor=None,
+                          page_length=1000, neutron_only=True):
+    params = []
+    if page_cursor:
+        params.append("_page_cursor=%s" % page_cursor)
+    params.append("_page_length=%s" % page_length)
+    # NOTE(salv-orlando): On the NVP backend the 'Quantum' tag is still
+    # used for marking Neutron entities in order to preserve compatibility
+    if neutron_only:
+        params.append("tag_scope=quantum")
+    query_params = "&".join(params)
+    path = "%s%s%s" % (path, "&" if (path.find("?") != -1) else "?",
+                       query_params)
+    body = do_request(HTTP_GET, path, cluster=cluster)
+    # Result_count won't be returned if _page_cursor is supplied
+    return body['results'], body.get('page_cursor'), body.get('result_count')
+
+
 def get_all_query_pages(path, c):
     need_more_results = True
     result_list = []
     page_cursor = None
-    query_marker = "&" if (path.find("?") != -1) else "?"
     while need_more_results:
-        page_cursor_str = (
-            "_page_cursor=%s" % page_cursor if page_cursor else "")
-        body = do_request(HTTP_GET,
-                          "%s%s%s" % (path, query_marker, page_cursor_str),
-                          cluster=c)
-        page_cursor = body.get('page_cursor')
+        results, page_cursor = get_single_query_page(
+            path, c, page_cursor)[:2]
         if not page_cursor:
             need_more_results = False
-        result_list.extend(body['results'])
+        result_list.extend(results)
     return result_list
 
 
@@ -514,9 +530,9 @@ def update_explicit_routes_lrouter(cluster, router_id, routes):
                                                      router_id, route)
                 added_routes.append(uuid)
     except NvpApiClient.NvpApiException:
-        LOG.exception(_('Cannot update NVP routes %(routes)s for'
-                        ' router %(router_id)s') % {'routes': routes,
-                                                    'router_id': router_id})
+        LOG.exception(_('Cannot update NVP routes %(routes)s for '
+                        'router %(router_id)s'),
+                      {'routes': routes, 'router_id': router_id})
         # Roll back to keep NVP in consistent state
         with excutils.save_and_reraise_exception():
             if nvp_routes:
@@ -649,7 +665,7 @@ def get_port_by_neutron_tag(cluster, lswitch_uuid, neutron_port_id):
                           filters={'tag': neutron_port_id,
                                    'tag_scope': 'q_port_id'})
     LOG.debug(_("Looking for port with q_port_id tag '%(neutron_port_id)s' "
-                "on: '%(lswitch_uuid)s'") %
+                "on: '%(lswitch_uuid)s'"),
               {'neutron_port_id': neutron_port_id,
                'lswitch_uuid': lswitch_uuid})
     res = do_request(HTTP_GET, uri, cluster=cluster)
@@ -658,7 +674,7 @@ def get_port_by_neutron_tag(cluster, lswitch_uuid, neutron_port_id):
         if num_results > 1:
             LOG.warn(_("Found '%(num_ports)d' ports with "
                        "q_port_id tag: '%(neutron_port_id)s'. "
-                       "Only 1 was expected.") %
+                       "Only 1 was expected."),
                      {'num_ports': num_results,
                       'neutron_port_id': neutron_port_id})
         return res["results"][0]
@@ -680,7 +696,8 @@ def get_port(cluster, network, port, relations=None):
 
 def _configure_extensions(lport_obj, mac_address, fixed_ips,
                           port_security_enabled, security_profiles,
-                          queue_id, mac_learning_enabled):
+                          queue_id, mac_learning_enabled,
+                          allowed_address_pairs):
     lport_obj['allowed_address_pairs'] = []
     if port_security_enabled:
         for fixed_ip in fixed_ips:
@@ -698,13 +715,17 @@ def _configure_extensions(lport_obj, mac_address, fixed_ips,
     if mac_learning_enabled is not None:
         lport_obj["mac_learning"] = mac_learning_enabled
         lport_obj["type"] = "LogicalSwitchPortConfig"
+    for address_pair in list(allowed_address_pairs or []):
+        lport_obj['allowed_address_pairs'].append(
+            {'mac_address': address_pair['mac_address'],
+             'ip_address': address_pair['ip_address']})
 
 
 def update_port(cluster, lswitch_uuid, lport_uuid, neutron_port_id, tenant_id,
                 display_name, device_id, admin_status_enabled,
                 mac_address=None, fixed_ips=None, port_security_enabled=None,
                 security_profiles=None, queue_id=None,
-                mac_learning_enabled=None):
+                mac_learning_enabled=None, allowed_address_pairs=None):
     # device_id can be longer than 40 so we rehash it
     hashed_device_id = hashlib.sha1(device_id).hexdigest()
     lport_obj = dict(
@@ -717,7 +738,8 @@ def update_port(cluster, lswitch_uuid, lport_uuid, neutron_port_id, tenant_id,
 
     _configure_extensions(lport_obj, mac_address, fixed_ips,
                           port_security_enabled, security_profiles,
-                          queue_id, mac_learning_enabled)
+                          queue_id, mac_learning_enabled,
+                          allowed_address_pairs)
 
     path = "/ws.v1/lswitch/" + lswitch_uuid + "/lport/" + lport_uuid
     try:
@@ -737,7 +759,7 @@ def create_lport(cluster, lswitch_uuid, tenant_id, neutron_port_id,
                  display_name, device_id, admin_status_enabled,
                  mac_address=None, fixed_ips=None, port_security_enabled=None,
                  security_profiles=None, queue_id=None,
-                 mac_learning_enabled=None):
+                 mac_learning_enabled=None, allowed_address_pairs=None):
     """Creates a logical port on the assigned logical switch."""
     # device_id can be longer than 40 so we rehash it
     hashed_device_id = hashlib.sha1(device_id).hexdigest()
@@ -753,7 +775,8 @@ def create_lport(cluster, lswitch_uuid, tenant_id, neutron_port_id,
 
     _configure_extensions(lport_obj, mac_address, fixed_ips,
                           port_security_enabled, security_profiles,
-                          queue_id, mac_learning_enabled)
+                          queue_id, mac_learning_enabled,
+                          allowed_address_pairs)
 
     path = _build_uri_path(LSWITCHPORT_RESOURCE,
                            parent_resource_id=lswitch_uuid)
@@ -940,10 +963,11 @@ def format_exception(etype, e, exception_locals):
     :param execption_locals: calling context local variable dict.
     :returns: a formatted string.
     """
-    msg = ["Error. %s exception: %s." % (etype, e)]
+    msg = [_("Error. %(type)s exception: %(exc)s.") %
+           {'type': etype, 'exc': e}]
     l = dict((k, v) for k, v in exception_locals.iteritems()
              if k != 'request')
-    msg.append("locals=[%s]" % str(l))
+    msg.append(_("locals=[%s]") % str(l))
     return ' '.join(msg)
 
 
@@ -1303,8 +1327,8 @@ def config_helper(http_method, http_uri, cluster):
                           http_uri,
                           cluster=cluster)
     except Exception as e:
-        msg = ("Error '%s' when connecting to controller(s): %s."
-               % (str(e), ', '.join(cluster.nvp_controllers)))
+        msg = (_("Error '%(err)s' when connecting to controller(s): %(ctl)s.")
+               % {'err': str(e), 'ctl': ', '.join(cluster.nvp_controllers)})
         raise Exception(msg)
 
 

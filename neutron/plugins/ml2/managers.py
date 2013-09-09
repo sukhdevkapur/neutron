@@ -19,6 +19,7 @@ from oslo.config import cfg
 import stevedore
 
 from neutron.common import exceptions as exc
+from neutron.extensions import portbindings
 from neutron.openstack.common import log
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import driver_api as api
@@ -30,13 +31,9 @@ LOG = log.getLogger(__name__)
 class TypeManager(stevedore.named.NamedExtensionManager):
     """Manage network segment types using drivers."""
 
-    # Mapping from type name to DriverManager
-    drivers = {}
-
     def __init__(self):
-        # REVISIT(rkukura): Need way to make stevedore use our logging
-        # configuration. Currently, nothing is logged if loading a
-        # driver fails.
+        # Mapping from type name to DriverManager
+        self.drivers = {}
 
         LOG.info(_("Configured type driver names: %s"),
                  cfg.CONF.ml2.type_drivers)
@@ -107,30 +104,21 @@ class TypeManager(stevedore.named.NamedExtensionManager):
 
 
 class MechanismManager(stevedore.named.NamedExtensionManager):
-    """Manage networking mechanisms using drivers.
-
-    Note that this is still a work in progress, and the interface
-    may change before the final release of Havana.
-    """
-
-    # TODO(apech): add calls for subnets
-
-    # Registered mechanism drivers, keyed by name.
-    mech_drivers = {}
-    # Ordered list of mechanism drivers, defining
-    # the order in which the drivers are called.
-    ordered_mech_drivers = []
+    """Manage networking mechanisms using drivers."""
 
     def __init__(self):
-        # REVISIT(rkukura): Need way to make stevedore use our logging
-        # configuration. Currently, nothing is logged if loading a
-        # driver fails.
+        # Registered mechanism drivers, keyed by name.
+        self.mech_drivers = {}
+        # Ordered list of mechanism drivers, defining
+        # the order in which the drivers are called.
+        self.ordered_mech_drivers = []
 
         LOG.info(_("Configured mechanism driver names: %s"),
                  cfg.CONF.ml2.mechanism_drivers)
         super(MechanismManager, self).__init__('neutron.ml2.mechanism_drivers',
                                                cfg.CONF.ml2.mechanism_drivers,
-                                               invoke_on_load=True)
+                                               invoke_on_load=True,
+                                               name_order=True)
         LOG.info(_("Loaded mechanism driver names: %s"), self.names())
         self._register_mechanisms()
 
@@ -141,13 +129,8 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         constructor.
         """
         for ext in self:
-            if ext.name in self.mech_drivers:
-                LOG.error(_("Mechanism driver '%s' ignored because "
-                            "driver is already registered"),
-                          ext.name)
-            else:
-                self.mech_drivers[ext.name] = ext
-                self.ordered_mech_drivers.append(ext)
+            self.mech_drivers[ext.name] = ext
+            self.ordered_mech_drivers.append(ext)
         LOG.info(_("Registered mechanism drivers: %s"),
                  [driver.name for driver in self.ordered_mech_drivers])
 
@@ -185,7 +168,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
             )
 
     def create_network_precommit(self, context):
-        """Notify all mechanism drivers of a network creation.
+        """Notify all mechanism drivers during network creation.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver create_network_precommit call fails.
@@ -198,7 +181,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("create_network_precommit", context)
 
     def create_network_postcommit(self, context):
-        """Notify all mechanism drivers of network creation.
+        """Notify all mechanism drivers after network creation.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver create_network_postcommit call fails.
@@ -212,7 +195,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("create_network_postcommit", context)
 
     def update_network_precommit(self, context):
-        """Notify all mechanism drivers of a network update.
+        """Notify all mechanism drivers during network update.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver update_network_precommit call fails.
@@ -225,7 +208,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("update_network_precommit", context)
 
     def update_network_postcommit(self, context):
-        """Notify all mechanism drivers of a network update.
+        """Notify all mechanism drivers after network update.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver update_network_postcommit call fails.
@@ -240,7 +223,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("update_network_postcommit", context)
 
     def delete_network_precommit(self, context):
-        """Notify all mechanism drivers of a network deletion.
+        """Notify all mechanism drivers during network deletion.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver delete_network_precommit call fails.
@@ -253,7 +236,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("delete_network_precommit", context)
 
     def delete_network_postcommit(self, context):
-        """Notify all mechanism drivers of a network deletion.
+        """Notify all mechanism drivers after network deletion.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver delete_network_postcommit call fails.
@@ -271,7 +254,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
                               continue_on_failure=True)
 
     def create_subnet_precommit(self, context):
-        """Notify all mechanism drivers of a subnet creation.
+        """Notify all mechanism drivers during subnet creation.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver create_subnet_precommit call fails.
@@ -284,7 +267,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("create_subnet_precommit", context)
 
     def create_subnet_postcommit(self, context):
-        """Notify all mechanism drivers of subnet creation.
+        """Notify all mechanism drivers after subnet creation.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver create_subnet_postcommit call fails.
@@ -298,7 +281,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("create_subnet_postcommit", context)
 
     def update_subnet_precommit(self, context):
-        """Notify all mechanism drivers of a subnet update.
+        """Notify all mechanism drivers during subnet update.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver update_subnet_precommit call fails.
@@ -311,7 +294,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("update_subnet_precommit", context)
 
     def update_subnet_postcommit(self, context):
-        """Notify all mechanism drivers of a subnet update.
+        """Notify all mechanism drivers after subnet update.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver update_subnet_postcommit call fails.
@@ -326,7 +309,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("update_subnet_postcommit", context)
 
     def delete_subnet_precommit(self, context):
-        """Notify all mechanism drivers of a subnet deletion.
+        """Notify all mechanism drivers during subnet deletion.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver delete_subnet_precommit call fails.
@@ -339,7 +322,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("delete_subnet_precommit", context)
 
     def delete_subnet_postcommit(self, context):
-        """Notify all mechanism drivers of a subnet deletion.
+        """Notify all mechanism drivers after subnet deletion.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver delete_subnet_postcommit call fails.
@@ -357,7 +340,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
                               continue_on_failure=True)
 
     def create_port_precommit(self, context):
-        """Notify all mechanism drivers of a port creation.
+        """Notify all mechanism drivers during port creation.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver create_port_precommit call fails.
@@ -384,7 +367,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("create_port_postcommit", context)
 
     def update_port_precommit(self, context):
-        """Notify all mechanism drivers of a port update.
+        """Notify all mechanism drivers during port update.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver update_port_precommit call fails.
@@ -397,7 +380,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("update_port_precommit", context)
 
     def update_port_postcommit(self, context):
-        """Notify all mechanism drivers of a port update.
+        """Notify all mechanism drivers after port update.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver update_port_postcommit call fails.
@@ -412,7 +395,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("update_port_postcommit", context)
 
     def delete_port_precommit(self, context):
-        """Notify all mechanism drivers of a port deletion.
+        """Notify all mechanism drivers during port deletion.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver delete_port_precommit call fails.
@@ -425,7 +408,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         self._call_on_drivers("delete_port_precommit", context)
 
     def delete_port_postcommit(self, context):
-        """Notify all mechanism drivers of a port deletion.
+        """Notify all mechanism drivers after port deletion.
 
         :raises: neutron.plugins.ml2.common.MechanismDriverError
         if any mechanism driver delete_port_postcommit call fails.
@@ -441,3 +424,85 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         """
         self._call_on_drivers("delete_port_postcommit", context,
                               continue_on_failure=True)
+
+    def bind_port(self, context):
+        """Attempt to bind a port using registered mechanism drivers.
+
+        :param context: PortContext instance describing the port
+
+        Called inside transaction context on session, prior to
+        create_network_precommit or update_network_precommit, to
+        attempt to establish a port binding.
+        """
+        binding = context._binding
+        LOG.debug(_("Attempting to bind port %(port)s on host %(host)s"),
+                  {'port': context._port['id'],
+                   'host': binding.host})
+        for driver in self.ordered_mech_drivers:
+            try:
+                driver.obj.bind_port(context)
+                if binding.segment:
+                    binding.driver = driver.name
+                    LOG.debug(_("Bound port: %(port)s, host: %(host)s, "
+                                "driver: %(driver)s, vif_type: %(vif_type)s, "
+                                "cap_port_filter: %(cap_port_filter)s, "
+                                "segment: %(segment)s"),
+                              {'port': context._port['id'],
+                               'host': binding.host,
+                               'driver': binding.driver,
+                               'vif_type': binding.vif_type,
+                               'cap_port_filter': binding.cap_port_filter,
+                               'segment': binding.segment})
+                    return
+            except Exception:
+                LOG.exception(_("Mechanism driver %s failed in "
+                                "bind_port"),
+                              driver.name)
+        binding.vif_type = portbindings.VIF_TYPE_BINDING_FAILED
+        LOG.warning(_("Failed to bind port %(port)s on host %(host)s"),
+                    {'port': context._port['id'],
+                     'host': binding.host})
+
+    def validate_port_binding(self, context):
+        """Check whether existing port binding is still valid.
+
+        :param context: PortContext instance describing the port
+        :returns: True if binding is valid, otherwise False
+
+        Called inside transaction context on session to validate that
+        the bound MechanismDriver's existing binding for the port is
+        still valid.
+        """
+        binding = context._binding
+        driver = self.mech_drivers.get(binding.driver, None)
+        if driver:
+            try:
+                return driver.obj.validate_port_binding(context)
+            except Exception:
+                LOG.exception(_("Mechanism driver %s failed in "
+                                "validate_port_binding"),
+                              driver.name)
+        return False
+
+    def unbind_port(self, context):
+        """Undo existing port binding.
+
+        :param context: PortContext instance describing the port
+
+        Called inside transaction context on session to notify the
+        bound MechanismDriver that its existing binding for the port
+        is no longer valid.
+        """
+        binding = context._binding
+        driver = self.mech_drivers.get(binding.driver, None)
+        if driver:
+            try:
+                driver.obj.unbind_port(context)
+            except Exception:
+                LOG.exception(_("Mechanism driver %s failed in "
+                                "unbind_port"),
+                              driver.name)
+        binding.vif_type = portbindings.VIF_TYPE_UNBOUND
+        binding.cap_port_filter = False
+        binding.driver = None
+        binding.segment = None

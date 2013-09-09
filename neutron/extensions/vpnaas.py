@@ -44,6 +44,11 @@ class IPsecSiteConnectionDpdIntervalValueError(qexception.InvalidInput):
                 "equal to or less than dpd_interval")
 
 
+class IPsecSiteConnectionMtuError(qexception.InvalidInput):
+    message = _("ipsec_site_connection MTU %(mtu)d is too small "
+                "for ipv%(version)s")
+
+
 class IKEPolicyNotFound(qexception.NotFound):
     message = _("IKEPolicy %(ikepolicy_id)s could not be found")
 
@@ -68,6 +73,10 @@ class IPsecPolicyInUse(qexception.InUse):
     message = _("IPsecPolicy %(ipsecpolicy_id)s is still in use")
 
 
+class DeviceDriverImportError(qexception.NeutronException):
+    message = _("Can not load driver :%(device_driver)s")
+
+
 vpn_supported_initiators = ['bi-directional', 'response-only']
 vpn_supported_encryption_algorithms = ['3des', 'aes-128',
                                        'aes-192', 'aes-256']
@@ -76,7 +85,8 @@ vpn_dpd_supported_actions = [
 ]
 vpn_supported_transform_protocols = ['esp', 'ah', 'ah-esp']
 vpn_supported_encapsulation_mode = ['tunnel', 'transport']
-vpn_supported_lifetime_units = ['seconds', 'kilobytes']
+#TODO(nati) add kilobytes when we support it
+vpn_supported_lifetime_units = ['seconds']
 vpn_supported_pfs = ['group2', 'group5', 'group14']
 vpn_supported_ike_versions = ['v1', 'v2']
 vpn_supported_auth_mode = ['psk']

@@ -405,6 +405,10 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
         # each router's SNAT rules will be in their own namespace
         ri.iptables_manager.ipv4['nat'].empty_chain('POSTROUTING')
         ri.iptables_manager.ipv4['nat'].empty_chain('snat')
+
+        # Add back the jump to float-snat
+        ri.iptables_manager.ipv4['nat'].add_rule('snat', '-j $float-snat')
+
         # And add them back if the action if add_rules
         if action == 'add_rules' and ex_gw_port:
             # ex_gw_port should not be None in this case
@@ -824,7 +828,7 @@ class L3NATAgentWithStateReport(L3NATAgent):
         LOG.info(_("agent_updated by server side %s!"), payload)
 
 
-def main():
+def main(manager='neutron.agent.l3_agent.L3NATAgentWithStateReport'):
     eventlet.monkey_patch()
     conf = cfg.CONF
     conf.register_opts(L3NATAgent.OPTS)
@@ -839,5 +843,5 @@ def main():
         binary='neutron-l3-agent',
         topic=topics.L3_AGENT,
         report_interval=cfg.CONF.AGENT.report_interval,
-        manager='neutron.agent.l3_agent.L3NATAgentWithStateReport')
+        manager=manager)
     service.launch(server).wait()
