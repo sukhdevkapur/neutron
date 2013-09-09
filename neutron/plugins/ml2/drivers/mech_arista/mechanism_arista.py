@@ -54,7 +54,7 @@ class AristaRPCWrapper(object):
         return keystone_auth_url
 
     def get_tenants(self):
-        """Returns dict of all tanants known by EOS.
+        """Returns dict of all tenants known by EOS.
 
         :returns: dictionary containing the networks per tenant
                   and VMs allocated per tenant
@@ -465,7 +465,7 @@ class AristaDriver(driver_api.MechanismDriver):
     def update_network_precommit(self, context):
         """At the moment we only support network name change
 
-        Any other change in network is not supprted at this time.
+        Any other change in network is not supported at this time.
         We do not store the network names, therefore, no DB store
         action is performed here.
         """
